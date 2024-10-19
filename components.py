@@ -2,7 +2,13 @@ import json
 
 import fasthtml.common as fh
 from const import BROKERS, CHOICE_TYPE, FILTER_FLDS, INFRA, RANGES
+from mysettings import AdType, db
 
+
+def get_dialog(hdr_msg: str, item) -> fh.DialogX:
+    hdr = fh.Div(fh.Button(aria_label='Close', rel='prev', hx_get='/cls_dialog', hx_swap='outerHTML'),  # Close button
+                 fh.P(hdr_msg))
+    return fh.DialogX(item, open=True, header=hdr, id='dialog', hx_swap='outerHTML')
 
 def slct_fld(nm: str, cs: dict, multiple: bool = False) -> fh.Select:
     return fh.Select(*[fh.Option(v, value=int(k)) for k, v in cs.items()], name=nm, multiple=multiple)
@@ -237,13 +243,9 @@ def autocomplete_field(prefix: str, options: list, label: str, multiple: bool=Fa
         add_fld,
     )
 
-def mk_fltr():
+def fltr_flds():
     rngs = [range_container(**v, prefix=k) for k, v in RANGES.items()]
-    frm = fh.Form(
-        fh.Div(
-            fh.Button(aria_label='Close', rel='prev', hx_post='/cls_fltr'),
-            cls='frm-header'
-        ),
+    return (
         autocomplete_field(
             'infrastructure', [*INFRA], 'Infraestrutura', multiple=True
         ),
@@ -260,12 +262,20 @@ def mk_fltr():
         (fh.Label('Em construção', _for='under_construction'),
         slct_fld("under_construction", CHOICE_TYPE),
         ),
+    )
+
+def mk_fltr():
+    return fh.Form(
+        fh.Div(
+            fh.Button('x', rel='prev', hx_post='/cls_fltr'),
+            cls='frm-header'
+        ),
+        fltr_flds(),
         (fh.Div(
             fh.Button('Limpar', type='button', hx_get='/clr_fltr'),
             fh.Button('Buscar', type='button', hx_post="/search_ppts", hx_target="#result"),
             cls='frm-footer'),)
     )
-    return frm
 
 def short_fltr():
     return fh.Form(
@@ -461,6 +471,35 @@ window.addEventListener("load", function () {{
     initMap();
 }});
 """
+
+def get_map_locations(d: dict) -> tuple:
+    """Return list of locations and Google map with clusters"""
+    commercial = d['commercial']
+    print(f'{commercial=}')
+    print(f'{type(commercial)=}')
+    
+    price_type = 'rent'
+    if int(commercial) == AdType.SELL:
+        price_type = 'sell'
+    qry = f"""
+    SELECT p.id, p.location, p.name, p.type,
+    c.name AS city, s.name AS street,
+    GROUP_CONCAT(pi.img) AS images,
+    SUM(m.abl) as max_area,
+    MIN(m.abl) as min_area,
+    MIN(m.{price_type}) as price
+    FROM properties AS p
+    LEFT JOIN cities AS c ON p.city_id = c.id
+    LEFT JOIN streets AS s ON p.street_id = s.id
+    LEFT JOIN ppt_images AS pi ON p.id = pi.ppt_id
+    LEFT JOIN modules AS m ON p.id = m.ppt_id
+    GROUP BY p.id
+    """
+    ppts = db.q(qry)
+    locations = list(map(ppt_serializer, ppts))
+    return (fh.Grid(fh.Ul(id="location-list"),
+                    fh.Div(id="map", cls='map')),
+            fh.Script(map_locations_script(locations, commercial)))
 
 def module_form(ppt_id:int):
     hdr = fh.Div(fh.Button(aria_label='Close', rel='prev', hx_get='/cls_dialog', hx_swap='outerHTML'),

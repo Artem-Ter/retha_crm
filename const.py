@@ -1,11 +1,5 @@
-import os
 
-from dotenv import load_dotenv
 from mysettings import AdType, Choice, PropertyType, Zone
-
-load_dotenv()
-
-GOOGLE_API = os.getenv('GOOGLE_API')
 
 DESCR = 'test description'
 

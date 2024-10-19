@@ -166,3 +166,4 @@ images/
 data/
 *.ico
 map.jpg
+.sesskey

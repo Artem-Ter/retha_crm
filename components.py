@@ -1,17 +1,25 @@
 import json
 
 import fasthtml.common as fh
-from const import BROKERS, CHOICE_TYPE, FILTER_FLDS, INFRA, RANGES
-from mysettings import AdType, db
+from const import (ADDRESS_FLDS, AVCB_TYPE, CHOICE_TYPE, FILTER_FLDS, RANGES,
+                   ZONE)
+from mysettings import db
 
+
+async def get_address_flds():
+    return (
+        get_autocomplete_for('cities', 'Cidade'),
+        get_autocomplete_for('regions', 'Região'),
+        get_autocomplete_for('districts', 'Bairro'),
+    )
 
 def get_dialog(hdr_msg: str, item) -> fh.DialogX:
     hdr = fh.Div(fh.Button(aria_label='Close', rel='prev', hx_get='/cls_dialog', hx_swap='outerHTML'),  # Close button
                  fh.P(hdr_msg))
     return fh.DialogX(item, open=True, header=hdr, id='dialog', hx_swap='outerHTML')
 
-def slct_fld(nm: str, cs: dict, multiple: bool = False) -> fh.Select:
-    return fh.Select(*[fh.Option(v, value=int(k)) for k, v in cs.items()], name=nm, multiple=multiple)
+def slct_fld(nm: str, cs: dict, multiple: bool = False, **kwargs) -> fh.Select:
+    return fh.Select(*[fh.Option(v, value=k) for k, v in cs.items()], name=nm, multiple=multiple, **kwargs)
 
 def range_script(prefix: str):
     return f"""
@@ -123,7 +131,7 @@ def autocomplete_script(prefix: str, multiple: bool):
     // Use 'me' and 'any' from Surreal for streamlined DOM interaction
 
     // Show dropdown and filter options when typing
-    me("#{prefix}_input").on("input", ev => {{
+    me("#{prefix}").on("input", ev => {{
         let filter = me(ev).value.toLowerCase();
         let options = any("#{prefix}_dropdown li");
 
@@ -145,35 +153,35 @@ def autocomplete_script(prefix: str, multiple: bool):
         
         if ({'true' if multiple else 'false'}) {{            
             addSelectedOption(value, prefix);  // Handle multiple selection
-            me("#" + prefix + "_input").value = "";  // Clear input after selection for multiple
+            me("#" + prefix).value = "";  // Clear input after selection for multiple
         }} else {{
-            me("#{prefix}_input").value = value;  // Handle single selection
+            me("#{prefix}").value = value;  // Handle single selection
         }}
 
         me("#{prefix}_dropdown").style.display = "none";  // Hide dropdown after selection
     }});
 
     // Add custom option on Enter key press for multiple selections
-    me("#{prefix}_input").on("keydown", ev => {{
+    me("#{prefix}").on("keydown", ev => {{
         if (ev.key === "Enter") {{
             ev.preventDefault();  // Prevent form submission
-            let value = me("#{prefix}_input").value.trim();
+            let value = me("#{prefix}").value.trim();
             let prefix = "{prefix}";
             if (value) {{
                 if ({'true' if multiple else 'false'}) {{
                     addSelectedOption(value, prefix);  // Add custom option for multiple
+                    me("#{prefix}").value = "";  // Clear input after Enter for multiple
                 }} else {{
-                    me("#{prefix}_input").value = value;  // For single selection, put the value in the input
+                    me("#{prefix}").value = value;  // For single selection, put the value in the input
                 }}
                 me("#{prefix}_dropdown").style.display = "none";  // Hide dropdown
-                me("#{prefix}_input").value = "";  // Clear input after Enter for multiple
             }}
         }}
     }});
 
     // Close the dropdown when clicking outside the input or dropdown
     document.addEventListener("click", function(event) {{
-        let input = me("#{prefix}_input");
+        let input = me("#{prefix}");
         let dropdown = me("#{prefix}_dropdown");
 
         // Close dropdown if the click is outside the input or dropdown
@@ -218,47 +226,50 @@ def autocomplete_script(prefix: str, multiple: bool):
     }}
     """
 
-def autocomplete_field(prefix: str, options: list, label: str, multiple: bool=False, tp: str='text'):
-    fld = (
+def get_autocomplete_for(table: str, label: str, multiple: bool=False, tp: str='text'):
+    """
+    Provide autocomplete field with options from db.table
+    """
+    qry = f"""
+    SELECT name AS option, id
+    FROM {table}
+    """
+    if table == 'users':
+        qry = """
+        SELECT name || ' - ' || email AS option, id
+        FROM users
+        """
+    qry_l = db.query(qry)
+    return fh.Div(
         fh.Input(
-            id=f"{prefix}_input", type=tp, placeholder=label,
+            id=f"{table}", type=tp, placeholder=label,
             autocomplete="off",  # Disable default browser autocomplete
         ),
         fh.Ul(
-            *[fh.Li(option, cls="dropdown-item") for option in options],  # Render the options dynamically with class
-            id=f"{prefix}_dropdown", cls="dropdown-list", style="display:none;"  # Hide dropdown initially
+            *[fh.Li(option['option'], value=option['id'], cls="dropdown-item") for option in qry_l],  # Render the options dynamically with class
+            id=f"{table}_dropdown", cls="dropdown-list", style="display:none;"  # Hide dropdown initially
         ),
-    )
-    add_fld = (
-        fh.Script(autocomplete_script(prefix, multiple))  # Add the dynamic filtering and selection
-    )
-    if multiple:
-        add_fld = (
-            fh.Div(id=f"{prefix}_selected", cls="selected-container"),  # Container for selected options
-            fh.Div(id=f"{prefix}_hidden"),  # Container for hidden inputs (submitted with form)
-            fh.Script(autocomplete_script(prefix, multiple))  # Add the dynamic filtering and selection script using me()
-        )
-    return fh.Div(
-        fld,
-        add_fld,
+        fh.Div(id=f"{table}_selected", cls="selected-container"),  # Container for selected options
+        fh.Div(id=f"{table}_hidden"),  # Container for hidden inputs (submitted with form)
+        fh.Script(autocomplete_script(table, multiple))  # Add the dynamic filtering and selection script
     )
 
 def fltr_flds():
     rngs = [range_container(**v, prefix=k) for k, v in RANGES.items()]
     return (
-        autocomplete_field(
-            'infrastructure', [*INFRA], 'Infraestrutura', multiple=True
+        get_autocomplete_for(
+            'infrastructures', 'Infraestrutura', multiple=True
         ),
         fh.Input(type='search', id="name", placeholder="Codigo do imovel"),
         *[slct_fld(k, v) for k, v in FILTER_FLDS.items()],
         (fh.Label('Em condomínio', _for='in_conodminium'),
         slct_fld("in_conodminium", CHOICE_TYPE)),
-        autocomplete_field('city', [f'{i}option'*i for i in range(1, 100)], 'Cidade'),
-        autocomplete_field('region', [f'op_{i}' for i in range(1, 100)], 'Região'),
-        autocomplete_field('district', [f'{i}option'*i for i in range(1, 100)], 'Bairro'),
-        autocomplete_field("zone", ["Norte", "Sul", "Leste", "Oeste"], 'Zona'),
+        get_autocomplete_for('cities', 'Cidade'),
+        get_autocomplete_for('regions', 'Região'),
+        get_autocomplete_for('districts', 'Bairro'),
+        slct_fld('Zona', ZONE),
         *rngs,
-        autocomplete_field('avcb', ['opt1', 'opt2', 'opt3'], 'AVCB'),
+        slct_fld('avcb', AVCB_TYPE),
         (fh.Label('Em construção', _for='under_construction'),
         slct_fld("under_construction", CHOICE_TYPE),
         ),
@@ -284,21 +295,21 @@ def short_fltr():
             *[slct_fld(k, v) for k, v in FILTER_FLDS.items()],
             (fh.Label('Em condomínio', _for='in_conodminium'),
             slct_fld("in_conodminium", CHOICE_TYPE)),
-            autocomplete_field('city', [f'{i}option'*i for i in range(1, 100)], 'Cidade'),
+            get_autocomplete_for('cities', 'Cidade'),
             range_container(**RANGES['price'], prefix='price'),
         ),
         fh.Hidden(name='in_conodminium'),
-        fh.Hidden(name='region_input'),
-        fh.Hidden(name='district_input'),
-        fh.Hidden(name='zone_input'),
+        fh.Hidden(name='region'),
+        fh.Hidden(name='district'),
+        fh.Hidden(name='zone'),
         fh.Hidden(name='area_min', value=str(RANGES['area']['minimum'])),
         fh.Hidden(name='area_max', value=str(RANGES['area']['maximum'])),
         fh.Hidden(name='area_min_handler', value=str(RANGES['area']['minimum'])),
         fh.Hidden(name='area_max_handler', value=str(RANGES['area']['maximum'])),
-        fh.Hidden(name='hight_min', value=str(RANGES['hight']['minimum'])),
-        fh.Hidden(name='hight_max', value=str(RANGES['hight']['maximum'])),
-        fh.Hidden(name='hight_min_handler', value=str(RANGES['hight']['minimum'])),
-        fh.Hidden(name='hight_max_handler', value=str(RANGES['hight']['maximum'])),
+        fh.Hidden(name='height_min', value=str(RANGES['height']['minimum'])),
+        fh.Hidden(name='height_max', value=str(RANGES['height']['maximum'])),
+        fh.Hidden(name='height_min_handler', value=str(RANGES['height']['minimum'])),
+        fh.Hidden(name='height_max_handler', value=str(RANGES['height']['maximum'])),
         fh.Hidden(name='efficiency_min', value=str(RANGES['efficiency']['minimum'])),
         fh.Hidden(name='efficiency_max', value=str(RANGES['efficiency']['maximum'])),
         fh.Hidden(name='efficiency_min_handler', value=str(RANGES['efficiency']['minimum'])),
@@ -327,7 +338,7 @@ def short_fltr():
         # fh.Hidden(name='last_update_max', value=str(RANGES['last_update']['maximum'])),
         # fh.Hidden(name='last_update_min_handler', value=str(RANGES['last_update']['minimum'])),
         # fh.Hidden(name='last_update_max_handler', value=str(RANGES['last_update']['maximum'])),
-        fh.Hidden(name='avcb_input'),
+        fh.Hidden(name='avcb'),
         fh.Hidden(name='under_construction'),
         fh.Button('Buscar', type='button', hx_post="/search_ppts", hx_target="#result"),
         fh.Button('Mais filtros', type='button', hx_post='/filters', hx_target='#search-section')
@@ -472,45 +483,16 @@ window.addEventListener("load", function () {{
 }});
 """
 
-def get_map_locations(d: dict) -> tuple:
-    """Return list of locations and Google map with clusters"""
-    commercial = d['commercial']
-    print(f'{commercial=}')
-    print(f'{type(commercial)=}')
-    
-    price_type = 'rent'
-    if int(commercial) == AdType.SELL:
-        price_type = 'sell'
-    qry = f"""
-    SELECT p.id, p.location, p.name, p.type,
-    c.name AS city, s.name AS street,
-    GROUP_CONCAT(pi.img) AS images,
-    SUM(m.abl) as max_area,
-    MIN(m.abl) as min_area,
-    MIN(m.{price_type}) as price
-    FROM properties AS p
-    LEFT JOIN cities AS c ON p.city_id = c.id
-    LEFT JOIN streets AS s ON p.street_id = s.id
-    LEFT JOIN ppt_images AS pi ON p.id = pi.ppt_id
-    LEFT JOIN modules AS m ON p.id = m.ppt_id
-    GROUP BY p.id
-    """
-    ppts = db.q(qry)
-    locations = list(map(ppt_serializer, ppts))
-    return (fh.Grid(fh.Ul(id="location-list"),
-                    fh.Div(id="map", cls='map')),
-            fh.Script(map_locations_script(locations, commercial)))
-
 def module_form(ppt_id:int):
     hdr = fh.Div(fh.Button(aria_label='Close', rel='prev', hx_get='/cls_dialog', hx_swap='outerHTML'),
                  fh.P("Cadastro do Modulo"))
     return fh.DialogX(fh.Form(
-        fh.Hidden(name='ppt_id', value=ppt_id),
+        fh.Hidden(name='pd_id', value=ppt_id),
         # *(slct_fld(k, v) for k, v in BROKERS.items()),
         fh.Input(name='owner_id', placeholder='Proprietario'),
         fh.Fieldset(
             fh.Label('Modulo:', fh.Input(name='title', placeholder='Nome')),
-            fh.Label('Pe direito, m', fh.Input(name='hight', placeholder='Pe direito, m')),
+            fh.Label('Pe direito, m', fh.Input(name='height', placeholder='Pe direito, m')),
             fh.Label('Piso, ton/m2', fh.Input(name='flr_capacity', placeholder='Piso, ton/m2')),
             fh.Label('Entre pilares, m', fh.Input(name='width', placeholder='Entre pilares, m')),
             fh.Label('ABL, m2', fh.Input(name='abl', placeholder='ABL, m2')),
@@ -522,7 +504,7 @@ def module_form(ppt_id:int):
             fh.Label('Data de disponibilidade', fh.Input(name='available', placeholder='Data de disponibilidade'))),
         fh.Button("Salva e Sai", type="submit", name="action", value="save_exit"),
         fh.Button("Adiciona mais modulos", type="submit", name="action", value="add_modules"),
-        hx_post=f'/properties/{ppt_id}/modules'), open=True, header=hdr, id='dialog', hx_swap='outerHTML')
+        hx_post=f'/properties/{ppt_id}/warehouses'), open=True, header=hdr, id='dialog', hx_swap='outerHTML')
 
 def ppt_serializer(ppt) -> dict:
     ppt['location'] = json.loads(ppt.get('location'))

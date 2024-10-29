@@ -1,10 +1,28 @@
 
-from mysettings import AdType, Choice, PropertyType, Zone
+from mysettings import AdType, Avcb, Choice, PropertyType, Role, Zone
 
 DESCR = 'test description'
 
 NA = 'not_available'
 ZERO = 0
+ANONIM = 'anonim'
+
+SECRETARY_REGISTER = {
+    Role.BROKER: 'Corretor',
+    Role.OWNER: 'Proprietário',
+    Role.USER: 'Usuário',
+}
+
+ADMIN_REGISTER = {
+    Role.ADMIN: 'Administrador',
+    Role.SECRETARY: 'Secretária',
+    **SECRETARY_REGISTER
+}
+
+AVCB_TYPE = {
+    Avcb.opt1: 'opt1',
+    Avcb.opt2: 'opt2'
+}
 
 CHOICE_TYPE = {
     Choice.BOTH: 'Tanto faz',
@@ -49,7 +67,9 @@ COSTS = {
 
 
 SLCT_FLD = {
-    'modify': {'select': lambda row: f'<input type="checkbox" name="select_{row["id"]}" value="{row["id"]}">'},
+    'modify': {
+        'select': lambda row: f'<input type="checkbox" name="select_{row["id"]}" value="{row["id"]}">'
+    },
     'rename': {'select': 'Selecionados'},
 }
 
@@ -62,9 +82,9 @@ CMP_MODIFY = {
     'available': lambda row: (f"{row['min_available']}"
                               if f"{row['min_available']}" == f"{row['max_available']}"
                               else f"{row['min_available']} a {row['max_available']}"),
-    'hight': lambda row: (f"{row['min_hight']}"
-                          if f"{row['min_hight']}" == f"{row['max_hight']}"
-                          else f"{row['min_hight']} a {row['max_hight']}"),
+    'height': lambda row: (f"{row['min_height']}"
+                          if f"{row['min_height']}" == f"{row['max_height']}"
+                          else f"{row['min_height']} a {row['max_height']}"),
     'energy': lambda row: (f"{row['min_energy']}"
                             if f"{row['min_energy']}" == f"{row['max_energy']}"
                             else f"{row['min_energy']} a {row['max_energy']}"),
@@ -78,9 +98,9 @@ FLDS_MODIFICATIONS = {
         'comparisons': {
             **SLCT_FLD['modify'],
             **CMP_MODIFY,
-            # 'hight': lambda row: (f"{row['min_hight']}"
-            #                               if f"{row['min_hight']}" == f"{row['max_hight']}"
-            #                               else f"{row['min_hight']} a {row['max_hight']}"),
+            # 'height': lambda row: (f"{row['min_height']}"
+            #                               if f"{row['min_height']}" == f"{row['max_height']}"
+            #                               else f"{row['min_height']} a {row['max_height']}"),
         },
     }
 }
@@ -97,7 +117,7 @@ RENAME = {
     'city': 'Cidade',
     'region': 'Região',
     'available': 'Disponível',
-    'hight': 'Pé direito, m',
+    'height': 'Pé direito, m',
     'efficiency': 'Eficiência logistica, %',
     'abl': 'ABL, m2',
     'docks': 'Docas',
@@ -123,9 +143,9 @@ MODIFICATIONS = {
     'available': lambda row: (f"{row['min_available']}"
                               if f"{row['min_available']}" == f"{row['max_available']}"
                               else f"{row['min_available']} a {row['max_available']}"),
-    'hight': lambda row: (f"{row['min_hight']}"
-                          if f"{row['min_hight']}" == f"{row['max_hight']}"
-                          else f"{row['min_hight']} a {row['max_hight']}"),
+    'height': lambda row: (f"{row['min_height']}"
+                          if f"{row['min_height']}" == f"{row['max_height']}"
+                          else f"{row['min_height']} a {row['max_height']}"),
     'energy': lambda row: (f"{row['min_energy']}"
                             if f"{row['min_energy']}" == f"{row['max_energy']}"
                             else f"{row['min_energy']} a {row['max_energy']}"),
@@ -139,12 +159,11 @@ BASIC_RENAME = {
     # 'area': 'Area Total, m2',
     'title': 'Ref.',
     'available': 'Disponível',
-    'hight': 'Pé direito, m',
+    'height': 'Pé direito, m',
     'efficiency': 'Eficiência logistica, %',
     'abl': 'ABL, m2',
     'docks': 'Docas',
     'flr_capacity': 'Piso, ton/m2',
-    
 }
 
 MDL_RENAME = {
@@ -195,7 +214,7 @@ BROKERS = {
 RANGES = {
     'price': {'minimum': 0, 'step': 5, 'maximum': 1000, 'label': 'Valor, R$/m2'},
     'area': {'minimum': 0, 'step': 10, 'maximum': 1000, 'label': 'Area Total, m2'},
-    'hight': {'minimum': 0, 'step': 1, 'maximum': 20, 'label': 'Pé direito, m'},
+    'height': {'minimum': 0, 'step': 1, 'maximum': 20, 'label': 'Pé direito, m'},
     'efficiency': {'minimum': 0, 'step': 10, 'maximum': 100, 'label': 'Eficiência logistica, %'},
     'abl': {'minimum': 0, 'step': 10, 'maximum': 1000, 'label': 'ABL, m2'},
     'doks': {'minimum': 0, 'step': 5, 'maximum': 100, 'label': 'Docas'},
@@ -218,7 +237,7 @@ MDL_COL = {
     # 'rent': 'Valor, R$',
     # 'area': 'Area Total, m2',
     'title': 'Ref.',
-    'hight': 'Pé direito, m',
+    'height': 'Pé direito, m',
     # 'efficiency': 'Eficiência logistica, %',
     'abl': 'ABL, m2',
     'docks': 'Docas',

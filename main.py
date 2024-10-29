@@ -3,22 +3,14 @@ from datetime import datetime as dt
 from hmac import compare_digest
 
 import aiofiles.os
+import const
 import fasthtml.common as fh
+import mysettings as s
 import pandas as pd
-from components import (autocomplete_field, carousel, fltr_flds, get_dialog,
+from components import (carousel, fltr_flds, get_address_flds,
+                        get_autocomplete_for, get_dialog,
                         map_comparisons_script, map_locations_script, mk_fltr,
                         module_form, ppt_serializer, short_fltr, slct_fld)
-from const import (ABOUT_BGD, AD_TYPE, ADDRESS_FLDS, BODY_BGD, CMP_MODIFY,
-                   CMP_RENAME, COSTS, COVER_BGD, DESCR, FILTER_FLDS,
-                   FLDS_MODIFICATIONS, FLDS_RENAME, LAST_PAGE_BGD, LR_PADDING,
-                   NA, PAGE_HEIGHT, PAGE_WIDTH, PPT_TYPE, RENAME, SLCT_FLD,
-                   TOP_PADDING, ZERO, ZONE, static_map_image)
-from mysettings import (GOOGLE_API, PDF_DIR, AdType, Comparison, Property,
-                        PropertyInfrastructure, Role, Status, User, cities,
-                        comparison_modules, comparisons, db, districts,
-                        infrastructures, modules, ppt_images,
-                        ppt_infrastructures, properties, regions, streets,
-                        tasks, users)
 from reportlab.lib import colors
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.pdfbase import pdfmetrics
@@ -26,7 +18,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from reportlab.platypus import Paragraph, Table, TableStyle
 from starlette.background import BackgroundTask
-from utils import get_or_create, save_img
+from utils import get_or_create, save_img, transform_to
 
 hdrs = [
     fh.Link(href='/css/main.css', rel='stylesheet'),
@@ -35,7 +27,7 @@ login_redir = fh.RedirectResponse('/login', status_code=303)
 
 # The `before` function is a *Beforeware* function. These are functions that run before a route handler is called.
 def before(req, sess):
-    auth = req.scope['auth'] = sess.get('auth', None)
+    auth = req.scope['auth'] = sess.get('auth')
     if not auth: return login_redir
 
 bware = fh.Beforeware(before, skip=[r'/favicon\.ico', r'/static/.*', r'.*\.css', '/login', '/', '/cls_dialog', '/register'])
@@ -44,7 +36,9 @@ bodykw = {"class": "relative bg-black font-geist text-black/80 font-details-off"
 
 app, rt = fh.fast_app(before=bware, hdrs=hdrs, bodykw=bodykw, live=True, debug=True)
 app.mount('/pdfs', fh.StaticFiles(directory='./pdfs'), name='pdfs')
-app.mount('/images', fh.StaticFiles(directory='./images'), name='images')
+app.mount('/images', fh.StaticFiles(directory='./images'), name='imgs')
+
+fh.setup_toasts(app)
 
 @app.get('/clr_fltr')
 def clr_fltr():
@@ -64,8 +58,8 @@ def cls_dialog():
 @app.get("/login")
 def login_form():
     frm = fh.Form(
-        fh.Input(id='email', type='email', placeholder='Email', required=True),
-        fh.Input(id='pwd', type='password', placeholder='Password', required=True),
+        fh.Input(name='email', type='email', placeholder='Email', required=True),
+        fh.Input(name='pwd', type='password', placeholder='Password', required=True),
         fh.Button('Login', type='submit', hx_post='/login'),  # Swap dialog on submit
         fh.P(fh.Small("Don't have an account yet?")),
         fh.Button('Register', hx_get='/register', hx_swap='outerHTML', hx_target='#dialog'),
@@ -73,144 +67,96 @@ def login_form():
     )
     return get_dialog('Login', frm)
 # , fh.Script("document.getElementById('login-section').close();")
-
-def admin_view():
-    return fh.Div(
-        fh.Button('+ Primeiro Atendimento', hx_get='/task_frm', hx_target='#dialog'),
-        hx_swap_oob='true',
-        id='body'
-    )
-
-@app.get('/task_frm')
-def get_task_frm():
-    frm = fh.Form(
-        fh.Input(name='broker', placeholder='Corretor'),
-        fltr_flds(),
-        fh.Button('Salvar e ver opcoes', type='submit', hx_post='/search_ppts', hx_target='#result')
-    )
-    return get_dialog('Tarefa', frm)
     
 @fh.dataclass
 class Login: email:str; pwd:str
 
 @app.post("/login")
-def login(login:Login, sess):
+async def login(login:Login, sess):
     if not login.email or not login.pwd: return login_redir
     try:
-        u = users[login.email]
+        u = list(s.users.rows_where('email = ?', (login.email,), limit=1))[0]
     # If the primary key does not exist, the method raises a `NotFoundError`.
     except fh.NotFoundError:
-        return fh.P("User doesn't exist. Please register.")
+        fh.add_toast(sess, "User doesn't exist. Please register.", 'info')
+        return login_redir
     # This compares the passwords using a constant time string comparison
     # https://sqreen.github.io/DevelopersSecurityBestPractices/timing-attack/python
-    if not compare_digest(u.pwd.encode("utf-8"), login.pwd.encode("utf-8")): return login_redir
+    if not compare_digest(u.get('pwd').encode("utf-8"), login.pwd.encode("utf-8")):
+        fh.add_toast(sess, "Incorrect password.", 'info')
+        return login_redir
     # Because the session is signed, we can securely add information to it. It's stored in the browser cookies.
     # If you don't pass a secret signing key to `FastHTML`, it will auto-generate one and store it in a file `./sesskey`.
-    sess['auth'] = u.email
-    sess['auth_r'] = u.role
-    role_views = {
-        Role.ADMIN: admin_view
-    }
+    sess['auth'] = u['id']
+    sess['auth_r'] = u['role']
+    body_section = VIEWS.get(u['role'])
     return fh.P(
         fh.Strong(
             fh.AX("Logout", hx_get="/logout", hx_swap='outerHTML', hx_target="#login-section")
         ), id="login-section", hx_swap_oob='true'
-    ), fh.Div(id='dialog', hx_swap_oob='true'), role_views.get(u.role)()
+    ), fh.Div(id='dialog', hx_swap_oob='true'), await body_section()
 
 @app.get('/register')
-def get_register():
+async def get_register(sess):
+    role = sess.get('auth_r', const.ANONIM)
+    if role == s.Role.ADMIN:
+        add_field = (
+            fh.Hidden(name='pwd', value='superpassword'),
+            slct_fld('role', const.ADMIN_REGISTER),
+        )
+    elif role == s.Role.SECRETARY:
+        add_field = (
+            fh.Hidden(name='pwd', value='superpassword'),
+            slct_fld('role', const.SECRETARY_REGISTER)
+        )
+    else:
+        add_field = (
+            fh.Input(name='pwd', type='password', placeholder='Password'),
+        )
     frm = fh.Form(
-        fh.Input(id='name', type='name', placeholder='Nome', required=True),
-        fh.Input(id='email', type='email', placeholder='Email', required=True),
-        fh.Input(id='phone', type='phone', placeholder='Cellular', required=True),
-        fh.Input(id='organization', type='organization', placeholder='Empresa', required=True),
-        fh.Input(id='pwd', type='password', placeholder='Password', required=True),
+        fh.Input(name='name', type='name', placeholder='Nome'),
+        fh.Input(name='email', type='email', placeholder='Email'),
+        fh.Input(name='phone', type='phone', placeholder='Cellular'),
+        fh.Input(name='organization', type='organization', placeholder='Empresa'),
+        *add_field,
         fh.Button('Register', type='submit', hx_post='/register'),  # Swap dialog on submit
         id='login-form'
     )
     return get_dialog('Cadastrar', frm)
 
 @app.post('/register')
-def register(sess, user:User):
-    u = users.insert(user)
-    sess['auth'] = u.email
-    sess['auth_r'] = u.role
-    return fh.P(
-        fh.Strong(
-            fh.AX("Logout", hx_get="/logout", hx_swap='outerHTML', hx_target="#login-section")
-        ), id="login-section", hx_swap_oob='true'
-    ), fh.Div(id='dialog', hx_swap_oob='true')
+async def register(sess, user:s.User):
+    print(f'{user=}')
+    u = s.users.insert(user)
+    if not sess.get('auth_r'):
+        print(f'{u.role}')
+        sess['auth'] = u.id
+        sess['auth_r'] = u.role
+        body_section = VIEWS.get(u.role)
+        return fh.P(
+            fh.Strong(
+                fh.AX("Logout", hx_get="/logout", hx_swap='outerHTML', hx_target="#login-section")
+            ), id="login-section", hx_swap_oob='true'
+        ), fh.Div(id='dialog', hx_swap_oob='true'), await body_section()
+    fh.add_toast(sess, f'User was registrered', 'success')
+    return fh.Div(id='dialog', hx_swap_oob='true')
 
 @app.get("/logout")
-def logout(sess):
+async def logout(sess):
     del sess['auth']
-    return fh.P(fh.Strong(fh.AX("Login", hx_get="/login", hx_swap='outerHTML', hx_target='#dialog')), id="login-section")
-
-@app.get('/ppt_form')
-async def ppt_form():
-    infras = [d['name'] for d in infrastructures()]
-    frm = fh.Form(
-        slct_fld('type', PPT_TYPE),
-        fh.CheckboxX(name='in_conodminium', role='switch', label='Em condomínio'),
-        fh.Input(name='name', placeholder='Nome de Condominio / Monousuário'),
-        fh.CheckboxX(name='on_site', role='switch', label='Publicar no Site'),
-        fh.CheckboxX(name='retha_admin', role='switch', label='Administração Retha'),
-        fh.CheckboxX(name='under_construction', role='switch', label='Em construção'),
-        *(fh.Input(name=k, placeholder=v) for k, v in COSTS.items()),
-        fh.Grid(*(fh.Input(name=k, placeholder=v) for k, v in ADDRESS_FLDS.items())),
-        slct_fld('zone', ZONE),
-        fh.Textarea(name='description', placeholder='Descrição', rows=10),
-        fh.Label('Fotos:', _for='images'),
-        fh.Input(name='images', type='file', multiple=True),
-        autocomplete_field('infrastructure', infras, 'Infraestrutura', multiple=True),
-        # fh.Input(name='infrastructure', placeholder='Infraestrutura'),
-        fh.Input(name='location', placeholder='Localização'),
-        fh.Button('Salva e Sai', type='submit', name='action', value='save_exit'),
-        fh.Button('Adiciona modulos', type='submit', name='action', value='add_modules'),
-        hx_post='/ppt_form',
-    )
-    return get_dialog('Cadastro do Imóvel', frm)
-
-@app.post('/ppt_form')
-async def add_ppt(frm: dict):
-    d = {
-        'street': 'streets',
-        'district': 'districts',
-        'city': 'cities',
-        'region': 'regions',
-    }
-    action = frm.pop('action')  # Retrieve the action from the form submission
-    infra = frm.pop('infrastructure')
-    del frm['infrastructure_input']
-    
-    ppt_imgs = frm.get('images')
-    if ppt_imgs:
-        del frm['images']
-    adrs = {f'{k}_id': get_or_create(v, frm.pop(k)) for k, v in d.items()}
-    
-    for k, v in frm.items():
-        f = Property.__annotations__[k]
-        try:
-            frm[k] = f(v)
-        except ValueError:
-            frm[k] = None
-    frm.update(adrs)
-    
-    cur_ppt = properties.insert(frm)
-    if ppt_imgs:
-        try:
-            for img in ppt_imgs:
-                await save_img(cur_ppt.id, img)
-        except TypeError:
-            await save_img(cur_ppt.id, ppt_imgs)
-    if infra:
-        for i in infra:
-            idx = get_or_create('infrastructures', i)
-            ppt_infrastructures.insert({'ppt_id': cur_ppt.id,
-                                        'infr_id': idx})
-    if action == 'save_exit':
-        return cls_dialog()
-    return module_form(cur_ppt.id)
+    del sess['auth_r']
+    body_section = VIEWS.get(const.ANONIM)
+    return fh.P(
+        fh.Strong(
+            fh.AX(
+                "Login",
+                hx_get="/login",
+                hx_swap='outerHTML',
+                hx_target='#dialog'
+            )
+        ),
+        id="login-section", hx_swap_oob='true'
+    ), await body_section()
 
 async def ppt_imgs(ppt):
     # Parse the images string as JSON, assuming it's a JSON array of base64 strings
@@ -227,10 +173,10 @@ async def ppt_dtls(sess, ad_type: int, ppt_id: int):
     print(f'{type(ad_type)=}')
     
     price_type = 'rent'
-    if ad_type == AdType.SELL:
+    if ad_type == s.AdType.SELL:
         price_type = 'sell'
     qry = f"""
-    SELECT m.id, title, flr_capacity, hight, width, abl,
+    SELECT m.id, title, flr_capacity, height, width, abl,
     office_area, docks, energy, available,
     p.type, p.description,
     c.name as city, s.name as street,
@@ -247,17 +193,17 @@ async def ppt_dtls(sess, ad_type: int, ppt_id: int):
     WHERE p.id = ?
     """
     model = 'properties'
-    db_q = db.q(qry, (ppt_id,))
+    db_q = s.db.q(qry, (ppt_id,))
     ppt = db_q[0]
     df = pd.DataFrame(db_q)
     
-    for k, v in SLCT_FLD['modify'].items():
+    for k, v in const.SLCT_FLD['modify'].items():
         df[k] = df.apply(v, axis=1)
-    tbl = df[list(FLDS_RENAME[model])].rename(columns=FLDS_RENAME[model]).transpose()
+    tbl = df[list(const.FLDS_RENAME[model])].rename(columns=const.FLDS_RENAME[model]).transpose()
     user_id = sess['auth']
-    imgs = ppt_images.rows_where('ppt_id = ?', (ppt_id,))
+    imgs = s.ppt_images.rows_where('ppt_id = ?', (ppt_id,))
     return fh.Titled(
-        f'{PPT_TYPE.get(ppt["type"])} RET{ppt_id:03d}',
+        f'{const.PPT_TYPE.get(ppt["type"])} RET{ppt_id:03d}',
         fh.Div(
             carousel(imgs),
             cls='property'
@@ -273,18 +219,24 @@ async def ppt_dtls(sess, ad_type: int, ppt_id: int):
             fh.NotStr(tbl.to_html(escape=False, header=False)),
             id='modules', cls='table-container'
         ),
-        fh.Button('Adicionar à comparação', type='submit', hx_post=f'/{user_id}/{ad_type}/{ppt_id}/comparison', hx_include='#modules'),
+        fh.Button(
+            'Adicionar à comparação',
+            type='submit',
+            hx_post=f'/{user_id}/{ad_type}/{ppt_id}/comparison',
+            hx_include='#modules',
+            hx_swap='outerHTML'
+        ),
         fh.Button('Agendar visita', type='submit', hx_post=f'/{user_id}/{ad_type}/{ppt_id}/visit', hx_include='#modules'),
     ), fh.Script(src='/js/carouselScroll.js')
 
 @app.post('/{user_id}/{ad_type}/{ppt_id}/comparison')
 async def add_comparison(req, sess, user_id: str, ad_type: int, ppt_id: int, d: dict):
     mdl_ids = d.values()
-    cmp_cls = Comparison(user_id=user_id, ppt_id=ppt_id, ad_type=ad_type, date=dt.now().strftime('%d/%m/%Y, %H:%M:%S'))
-    cmp = comparisons.insert(cmp_cls)
+    cmp_cls = s.Comparison(user_id=user_id, ppt_id=ppt_id, ad_type=ad_type, date=dt.now().strftime('%d/%m/%Y, %H:%M:%S'))
+    cmp = s.comparisons.insert(cmp_cls)
     for id in mdl_ids:
-        comparison_modules.insert(comparison_id=cmp['id'], module_id=id)
-    return 'Done'
+        s.comparison_modules.insert(comparison_id=cmp['id'], module_id=id)
+    return fh.A('Ver comparações', type='submit', href=f'/{user_id}/comparisons/{int(s.Status.ACTIVE)}', target='blank')
 
 @app.get('/{user_id}/comparisons/{status}')
 async def get_comparisons(user_id: str, status: str):
@@ -296,8 +248,8 @@ async def get_comparisons(user_id: str, status: str):
     MAX(m.flr_capacity) as max_flr_capacity,
     MIN(m.available) as min_available,
     MAX(m.available) as max_available,
-    MIN(m.hight) as min_hight,
-    MAX(m.hight) as max_hight,
+    MIN(m.height) as min_height,
+    MAX(m.height) as max_height,
     MIN(m.energy) as min_energy,
     MAX(m.energy) as max_energy,
     MIN(m.width) as min_width,
@@ -316,13 +268,13 @@ async def get_comparisons(user_id: str, status: str):
     WHERE cmp.user_id = ? AND status = ?
     GROUP BY cmp.id
     """
-    db_q = db.q(qry, (user_id, status))
+    db_q = s.db.q(qry, (user_id, status))
     cmp_list = [{'index': i + 1, 'location': json.loads(d.get('location'))} for i, d in enumerate(db_q)]
     df = pd.DataFrame(db_q)
     model = 'comparisons'
-    for k, v in FLDS_MODIFICATIONS['rent'][model].items():
+    for k, v in const.FLDS_MODIFICATIONS['rent'][model].items():
         df[k] = df.apply(v, axis=1)
-    tbl = df[list(FLDS_RENAME[model])].rename(columns=FLDS_RENAME[model]).transpose()
+    tbl = df[list(const.FLDS_RENAME[model])].rename(columns=const.FLDS_RENAME[model]).transpose()
     return fh.Div(
         (fh.Titled(
             'Comparacao',
@@ -334,10 +286,10 @@ async def get_comparisons(user_id: str, status: str):
                 action='/download_pdf', method='post',
                 id='comparisons', cls='table-container'),
             fh.Button('Arquivar', type='submit', hx_post=f'/{user_id}/comparisons/add_archive', hx_include='#comparisons'),
-            fh.Button('Agendar visita', type='submit', hx_post=f'/{user_id}/{NA}/{ZERO}/visit', hx_include='#comparisons'),
+            fh.Button('Agendar visita', type='submit', hx_post=f'/{user_id}/{const.NA}/{const.ZERO}/visit', hx_include='#comparisons'),
         ),
             fh.Script(map_comparisons_script(cmp_list)), *scripts),
-            hx_swap_oob='true', id='body'
+            # hx_swap_oob='true', id='body'
     )
 
 async def delete_pdf(fpath: str):
@@ -362,7 +314,6 @@ async def download_pdf(d: dict):
         background=task
     )
 
-# @app.post('/create_pdf')
 def create_pdf(cmp_ids, output_pdf):
     """Create pdf using reportlab."""
     # cmp_ids = tuple(d.values())
@@ -376,8 +327,8 @@ def create_pdf(cmp_ids, output_pdf):
     MAX(m.flr_capacity) as max_flr_capacity,
     MIN(m.available) as min_available,
     MAX(m.available) as max_available,
-    MIN(m.hight) as min_hight,
-    MAX(m.hight) as max_hight,
+    MIN(m.height) as min_height,
+    MAX(m.height) as max_height,
     MIN(m.energy) as min_energy,
     MAX(m.energy) as max_energy,
     MIN(m.width) as min_width,
@@ -409,13 +360,13 @@ def create_pdf(cmp_ids, output_pdf):
     GROUP BY c.id
     
     """
-    db_imgs = db.q(qry_img, cmp_ids)
-    db_q = db.q(qry, cmp_ids)
+    db_imgs = s.db.q(qry_img, cmp_ids)
+    db_q = s.db.q(qry, cmp_ids)
     locations = [{'index': i + 1, 'location': json.loads(d.get('location'))} for i, d in enumerate(db_q)]
     df = pd.DataFrame(db_q)
-    for k, v in CMP_MODIFY.items():
+    for k, v in const.CMP_MODIFY.items():
         df[k] = df.apply(v, axis=1)
-    tbl = df[list(CMP_RENAME)].rename(columns=CMP_RENAME).transpose()
+    tbl = df[list(const.CMP_RENAME)].rename(columns=const.CMP_RENAME).transpose()
     # now = dt.now()
     # date = now.strftime('%d_%m_%Y_%H:%M:%S')
 
@@ -425,14 +376,14 @@ def create_pdf(cmp_ids, output_pdf):
     pdfmetrics.registerFont(TTFont('Poppins', 'assets/fonts/Poppins-Regular.ttf'))
 
     # Create a PDF
-    pdf_canvas = canvas.Canvas(output_pdf, pagesize=(PAGE_WIDTH, PAGE_HEIGHT), pageCompression=1)
+    pdf_canvas = canvas.Canvas(output_pdf, pagesize=(const.PAGE_WIDTH, const.PAGE_HEIGHT), pageCompression=1)
 
     # First page
-    pdf_canvas.drawImage(COVER_BGD, 0, 0, width=PAGE_WIDTH, height=PAGE_HEIGHT)
+    pdf_canvas.drawImage(const.COVER_BGD, 0, 0, width=const.PAGE_WIDTH, height=const.PAGE_HEIGHT)
     pdf_canvas.setFont("Poppins", 60)
     pdf_canvas.setFillColor(colors.white)
-    pdf_canvas.drawString(LR_PADDING, TOP_PADDING, "Opções para locação")
-    pdf_canvas.drawString(LR_PADDING, TOP_PADDING - 60, "Limeira e região")
+    pdf_canvas.drawString(const.LR_PADDING, const.TOP_PADDING, "Opções para locação")
+    pdf_canvas.drawString(const.LR_PADDING, const.TOP_PADDING - 60, "Limeira e região")
 
     # Bookmark the first page and add an outline entry
     pdf_canvas.bookmarkPage("first_page")
@@ -441,7 +392,7 @@ def create_pdf(cmp_ids, output_pdf):
     pdf_canvas.showPage()
 
     # About page
-    pdf_canvas.drawImage(ABOUT_BGD, 0, 0, width=PAGE_WIDTH, height=PAGE_HEIGHT)
+    pdf_canvas.drawImage(const.ABOUT_BGD, 0, 0, width=const.PAGE_WIDTH, height=const.PAGE_HEIGHT)
 
     # Bookmark the about page and add an outline entry
     pdf_canvas.bookmarkPage("about_page")
@@ -451,14 +402,14 @@ def create_pdf(cmp_ids, output_pdf):
 
     # Step 1: Define a form XObject for the background
     pdf_canvas.beginForm("background_form")
-    pdf_canvas.drawImage(BODY_BGD, 0, 0, width=PAGE_WIDTH, height=PAGE_HEIGHT)
+    pdf_canvas.drawImage(const.BODY_BGD, 0, 0, width=const.PAGE_WIDTH, height=const.PAGE_HEIGHT)
     pdf_canvas.endForm()
 
     # Second page (static map and links)
     pdf_canvas.doForm("background_form")
 
     # Insert static map
-    pdf_canvas.drawImage(static_map_image, 400, 200, width=1200, height=800)
+    pdf_canvas.drawImage(const.static_map_image, 400, 200, width=1200, height=800)
 
     locations_list = ((f"Imóvel_{i['index']:02d}", f"https://www.google.com/maps?q={i['location']['lat']},{i['location']['lng']}") for i in locations)
     # Add "See on map" links
@@ -500,7 +451,7 @@ def create_pdf(cmp_ids, output_pdf):
         data.append(row_data)
 
     # Dynamically calculate column widths based on page size and padding
-    available_width = PAGE_WIDTH - 2 * LR_PADDING
+    available_width = const.PAGE_WIDTH - 2 * const.LR_PADDING
     col_width = available_width / len(data[0])
     tbl_width = [col_width] * len(data[0])
 
@@ -521,7 +472,7 @@ def create_pdf(cmp_ids, output_pdf):
     ]))
 
     # Table height for calculating col positions (assumes uniform col heights)
-    first_col_y = PAGE_HEIGHT - TOP_PADDING  # Starting y-position for the first col
+    first_col_y = const.PAGE_HEIGHT - const.TOP_PADDING  # Starting y-position for the first col
     col_height = 40
 
     # Add links manually for the first column cols
@@ -529,7 +480,7 @@ def create_pdf(cmp_ids, output_pdf):
         header_number = f"{col_idx + 1:02d}"
         
         # Calculate the y position of each col's cell
-        col_x_position = LR_PADDING + (col_idx + 1) * col_width
+        col_x_position = const.LR_PADDING + (col_idx + 1) * col_width
         
         # Define the clickable rectangle (adjust left/right as needed)
         link_rect = (col_x_position, first_col_y, col_x_position + col_width, first_col_y - col_height)
@@ -538,8 +489,8 @@ def create_pdf(cmp_ids, output_pdf):
         pdf_canvas.linkRect(header_number, header_number, link_rect)
 
     # Wrap and draw the table
-    table_width, table_height = table.wrap(PAGE_WIDTH, PAGE_HEIGHT - TOP_PADDING)
-    table.drawOn(pdf_canvas, LR_PADDING, PAGE_HEIGHT - TOP_PADDING - table_height)
+    table_width, table_height = table.wrap(const.PAGE_WIDTH, const.PAGE_HEIGHT - const.TOP_PADDING)
+    table.drawOn(pdf_canvas, const.LR_PADDING, const.PAGE_HEIGHT - const.TOP_PADDING - table_height)
     
     # Bookmark the table page and add an outline entry
     pdf_canvas.bookmarkPage("table_page")
@@ -548,7 +499,7 @@ def create_pdf(cmp_ids, output_pdf):
     pdf_canvas.showPage()
 
     # Add Dynamic Pages for each comparison
-    tbl_dtls = df[list(FLDS_RENAME['modules'])].rename(columns=FLDS_RENAME['modules']).transpose()
+    tbl_dtls = df[list(const.FLDS_RENAME['modules'])].rename(columns=const.FLDS_RENAME['modules']).transpose()
     for idx in tbl_dtls.columns:
         header_number = f"{idx + 1:02d}"
         
@@ -559,7 +510,7 @@ def create_pdf(cmp_ids, output_pdf):
         # Create two pages for each row
         pdf_canvas.doForm("background_form")
         pdf_canvas.setFont("Poppins", 40)
-        pdf_canvas.drawString(LR_PADDING, PAGE_HEIGHT - TOP_PADDING + 100, f"Imóvel {idx + 1:02d}")
+        pdf_canvas.drawString(const.LR_PADDING, const.PAGE_HEIGHT - const.TOP_PADDING + 100, f"Imóvel {idx + 1:02d}")
         
         column_data = tbl_dtls[idx].reset_index().values.tolist()  # Converts the column into a list of [index, value] pairs
         table1 = Table(column_data[:-5], colWidths=[350] * 2)
@@ -576,8 +527,8 @@ def create_pdf(cmp_ids, output_pdf):
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
         ]))
         # Wrap and draw the table
-        table1_width, table1_height = table1.wrap(PAGE_WIDTH, PAGE_HEIGHT - TOP_PADDING)
-        table1.drawOn(pdf_canvas, LR_PADDING, PAGE_HEIGHT - TOP_PADDING - table1_height)
+        table1_width, table1_height = table1.wrap(const.PAGE_WIDTH, const.PAGE_HEIGHT - const.TOP_PADDING)
+        table1.drawOn(pdf_canvas, const.LR_PADDING, const.PAGE_HEIGHT - const.TOP_PADDING - table1_height)
         table2 = Table(column_data[-5:], colWidths=[350] * 2)
         # Define table style with increased font size
         table2.setStyle(TableStyle([
@@ -592,8 +543,8 @@ def create_pdf(cmp_ids, output_pdf):
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
         ]))
         # Wrap and draw the table
-        table2_width, table2_height = table2.wrap(PAGE_WIDTH, PAGE_HEIGHT - TOP_PADDING)
-        table2.drawOn(pdf_canvas, LR_PADDING + 1000, PAGE_HEIGHT - TOP_PADDING - table2_height - 300)
+        table2_width, table2_height = table2.wrap(const.PAGE_WIDTH, const.PAGE_HEIGHT - const.TOP_PADDING)
+        table2.drawOn(pdf_canvas, const.LR_PADDING + 1000, const.PAGE_HEIGHT - const.TOP_PADDING - table2_height - 300)
         
         img_list = db_imgs[idx]['img'].split(',')
         infr_list = db_imgs[idx]['infr'].split(',')
@@ -601,7 +552,7 @@ def create_pdf(cmp_ids, output_pdf):
         if img_list:
             pdf_canvas.drawImage(
                 img_list[0][1:],
-                LR_PADDING + 1000, PAGE_HEIGHT - TOP_PADDING - 300,
+                const.LR_PADDING + 1000, const.PAGE_HEIGHT - const.TOP_PADDING - 300,
                 width=700, height=300
             )
         pdf_canvas.showPage()
@@ -610,13 +561,13 @@ def create_pdf(cmp_ids, output_pdf):
             try:
                 pdf_canvas.drawImage(
                     img_list[i][1:],
-                    LR_PADDING, PAGE_HEIGHT - TOP_PADDING - 330 * i,
+                    const.LR_PADDING, const.PAGE_HEIGHT - const.TOP_PADDING - 330 * i,
                     width=700, height=300
                 )
             except IndexError:
                 break
         col = [[Paragraph('Infraestrutura:', custom_style)]] + [[Paragraph(f'•  {c}', custom_style)] for c in infr_list]
-        table3 = Table(col, colWidths=PAGE_WIDTH / 2 - LR_PADDING)
+        table3 = Table(col, colWidths=const.PAGE_WIDTH / 2 - const.LR_PADDING)
         # Define table style
         table3.setStyle(TableStyle([
             # ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
@@ -628,12 +579,12 @@ def create_pdf(cmp_ids, output_pdf):
             ('GRID', (0, 0), (-1, -1), 0, colors.transparent),
         ]))
         # Wrap and draw the table
-        table3_width, table3_height = table3.wrap(PAGE_WIDTH, PAGE_HEIGHT - TOP_PADDING)
-        table3.drawOn(pdf_canvas, PAGE_WIDTH / 2, PAGE_HEIGHT - TOP_PADDING - table3_height)
+        table3_width, table3_height = table3.wrap(const.PAGE_WIDTH, const.PAGE_HEIGHT - const.TOP_PADDING)
+        table3.drawOn(pdf_canvas, const.PAGE_WIDTH / 2, const.PAGE_HEIGHT - const.TOP_PADDING - table3_height)
 
         pdf_canvas.showPage()
     # Last page (background 1.jpg)
-    pdf_canvas.drawImage(LAST_PAGE_BGD, 0, 0, width=PAGE_WIDTH, height=PAGE_HEIGHT)
+    pdf_canvas.drawImage(const.LAST_PAGE_BGD, 0, 0, width=const.PAGE_WIDTH, height=const.PAGE_HEIGHT)
 
     # Bookmark the last page and add an outline entry
     pdf_canvas.bookmarkPage("last_page")
@@ -658,13 +609,13 @@ def add_archive(user_id: str, table: str, d: dict):
         WHERE id IN ({placeholders});
         """
         # Execute the query and pass the tuple of IDs
-        db.q(qry, ids)
+        s.db.q(qry, ids)
     return 'Done'
 
 @app.get('/comparisons/{id}')
 async def get_comparison(id: int):
     qry = """
-    SELECT  title, flr_capacity, hight, width, abl,
+    SELECT  title, flr_capacity, height, width, abl,
     office_area, docks, energy, available,
     p.id, p.type, p.description, ct.name as city,
     s.name as street,
@@ -682,7 +633,7 @@ async def get_comparison(id: int):
     LEFT JOIN modules as m ON cm.module_id = m.id
     WHERE c.id = ?
     """
-    db_q = db.q(qry, (id,))
+    db_q = s.db.q(qry, (id,))
     ppt = db_q[0]
     infra_qry = """
     SELECT i.name
@@ -690,12 +641,12 @@ async def get_comparison(id: int):
     LEFT JOIN infrastructures AS i ON p.infr_id = i.id
     WHERE p.ppt_id = ?
     """
-    infras = db.q(infra_qry, (ppt['id'],))
-    imgs = ppt_images.rows_where('ppt_id = ?', (ppt['id'],))
+    infras = s.db.q(infra_qry, (ppt['id'],))
+    imgs = s.ppt_images.rows_where('ppt_id = ?', (ppt['id'],))
     df = pd.DataFrame(db_q)
-    tbl = df[list(FLDS_RENAME['modules'])].rename(columns=FLDS_RENAME['modules']).transpose()
+    tbl = df[list(const.FLDS_RENAME['modules'])].rename(columns=const.FLDS_RENAME['modules']).transpose()
     item = fh.Titled(
-        f'{PPT_TYPE.get(ppt["type"])} RET{ppt["id"]:03d}',
+        f'{const.PPT_TYPE.get(ppt["type"])} RET{ppt["id"]:03d}',
         fh.Div(
             carousel(imgs),
             cls='property'
@@ -713,17 +664,17 @@ async def get_comparison(id: int):
         ),
     )
     return get_dialog('Detalhes', item)
-    
+
 @app.post('/{user_id}/{ad_type}/{ppt_id}/visit')
 async def add_visit(req, sess, user_id: str, ad_type: str, ppt_id: int, d: dict):
-    if ad_type == NA:
+    if ad_type == const.NA:
         return 'Done'
     return 'Done'
 
-@app.post("/properties/{ppt_id}/modules")
+@app.post("/properties/{ppt_id}/warehouses")
 async def add_module(ppt_id:int, mdl:dict):
     action = mdl.pop('action')
-    modules.insert(mdl)
+    s.warehouses.insert(mdl)
     if action == 'save_exit':
         return cls_dialog()
     del mdl['title']
@@ -735,19 +686,19 @@ async def header_section(sess):
         login_element = fh.P(fh.Strong(fh.AX("Logout", hx_get="/logout", hx_swap="outerHTML", hx_target="#login-section")), id="login-section")
     else:
         login_element = fh.P(fh.Strong(fh.AX("Login", hx_get="/login", hx_target="#dialog")), id="login-section")
-    role = sess.get('auth_r', 'anonim')
+    role = sess.get('auth_r', const.ANONIM)
     return fh.Container(fh.Header(
         fh.Nav(fh.P(fh.Strong(fh.A("Retha", href="/", id='retha')), id='Retha'),
-               fh.P(fh.Strong(fh.AX('Tasks', '/add_task', 'body'))),
+               fh.P(fh.Strong(fh.AX('Tasks', '/new_task', 'body'))),
                fh.P(
                    fh.Strong(
-                       fh.AX("Comparisons", hx_get=f"{sess.get('auth')}/comparisons/{Status.ACTIVE}", id='profile', hx_target='#body')
+                       fh.A("Comparisons", href=f"{sess.get('auth')}/comparisons/{s.Status.ACTIVE}", id='profile', target='blank')
                     ), id='Profile'),
                login_element)), id='header')
 
 @app.get('/profile')
 def profile(sess):
-    u = users[sess['auth']]
+    u = s.users[sess['auth']]
     return fh.Titled('Profile Info', fh.Div(id='profile'))
 
 @app.post('/filters')
@@ -762,11 +713,11 @@ def show_filters(d: dict):
 @app.post('/search_ppts')
 async def get_locations(d:dict):
     commercial = d['commercial']
-    ad_type = AdType.RENT
+    ad_type = s.AdType.RENT
     price_type = 'rent'
-    if int(commercial) == AdType.SELL:
+    if int(commercial) == s.AdType.SELL:
         price_type = 'sell'
-        ad_type = AdType.SELL
+        ad_type = s.AdType.SELL
         
     qry = f"""
     SELECT p.id, p.location, p.name, p.type,
@@ -782,51 +733,289 @@ async def get_locations(d:dict):
     LEFT JOIN modules AS m ON p.id = m.ppt_id
     GROUP BY p.id
     """
-    ppts = db.q(qry)
+    ppts = s.db.q(qry)
     locations = list(map(ppt_serializer, ppts))
-    
-    broker = d.get('broker')
-    print(broker)
-    if broker:
-        print(f'{d=}')
-        search_section = fh.Div(id='dialog', hx_swap_oob='true')
-        
-    else:
-        frm = short_fltr()
-        d['commercial'] = ad_type
-        # d['under_construction'] = CHOICE_TYPE[int(d['under_construction'])]
-        frm = fh.fill_form(frm, d)
-        search_section = fh.Div(frm, hx_swap_oob='true', id='search-section')
+    frm = short_fltr()
+    d['commercial'] = ad_type
+    # d['under_construction'] = CHOICE_TYPE[int(d['under_construction'])]
+    frm = fh.fill_form(frm, d)
     return (fh.Grid(fh.Ul(id="location-list"),
                     fh.Div(id="map", cls='map')),
-            fh.Script(map_locations_script(locations, commercial))), search_section
+            fh.Script(map_locations_script(locations, commercial))), fh.Div(frm, hx_swap_oob='true', id='search-section')
 
-@app.get('/add_task')
-def get_task_form():
-    return fh.Div(
-        fh.Form(
-            fh.Fieldset(
-                fh.Label('Client:', fh.Input(name='client')),
-                *[slct_fld(k, v) for k, v in FILTER_FLDS.items()],
-                fh.Label('Broker:', fh.Input(name='broker')),
-            ),
-            fh.Button('Save', type='submit', hx_post='/tasks')
-    ))
+@app.get('/new_task')
+def get_new_task(sess):
+    role = sess.get('auth_r')
+    clients = fh.Label(
+        'Cliente',
+        fh.Grid(
+            get_autocomplete_for('users', 'Cliente'),
+            fh.Button('+', hx_get='/register', hx_target='#dialog')
+        )
+    )
+    if role == s.Role.BROKER:
+        brokers = fh.Hidden(name='broker', value=sess['auth'])
+    else:
+        brks = s.users.rows_where('role = ?', (s.Role.BROKER,), select='name || " - " || email AS broker, id')
+        # qry = """
+        # SELECT name || ' - ' || email as broker, id
+        # FROM users AS u
+        # WHERE u.role = ?
+        # """
+        # brks = s.db.q(qry, (s.Role.BROKER,))
+        cs = {b.get('id'): b.get('broker') for b in brks}
+        brokers = fh.Label('Corretor', slct_fld('broker', cs))
+    frm = fh.Form(
+        fh.Div(id='register', hx_swap='outerHTML'),
+        clients,
+        brokers,
+        fltr_flds(),
+        fh.Button('Salvar e ver opcoes', type='submit', hx_post='/new_task', hx_target='#result')
+    )
+    return get_dialog('Novo Negócio', frm)
 
-@app.post('/tasks')
-def create_task(d: dict):
+@app.post('/new_task')
+def create_new_task(d: dict):
     print(f'{d=}')
-    return 'done'
 
-async def body_section():
-    """Body section. Swaped based on view and user_role"""
+@app.post('/ppt/{ppt_id}/{ppt_type}')
+async def add_ppt_dtls(ppt_id:int, ppt_type: int, frm: dict):
+    ppt_d = s.property_details.insert({
+        'ppt_id': ppt_id,
+        'type': ppt_type,
+        'description': frm.get('description'),
+        'iptu': transform_to(float, frm.get('iptu')),
+        'condominium': transform_to(float, frm.get('condominium')),
+        'foro': transform_to(float, frm.get('foro')),
+    })
+    
+    imgs = frm.get('images')
+    if imgs:
+        try:
+            for img in imgs:
+                await save_img(ppt_d.id, img)
+        except TypeError:
+            await save_img(ppt_d.id, imgs)
+    # insert logic to select next form based on type
+    d = {
+        s.PropertyType.WAREHOUSE: module_form,
+        s.PropertyType.LAND: module_form,
+        s.PropertyType.OFFICE: module_form,
+        s.PropertyType.SHOP: module_form,
+    }
+    return d.get(ppt_type)(ppt_d.id)
+
+@app.get('/frm/{ppt_id}/{ppt_type}')
+async def get_ppt_dtls(ppt_id:int, ppt_type: int):
+    form = fh.Form(
+        *(fh.Input(name=k, placeholder=v) for k, v in const.COSTS.items()),
+        fh.Textarea(name='description', placeholder='Descrição', rows=10),
+        fh.Label(
+            'Fotos',
+            fh.Input(name='images', type='file', multiple=True)
+        ),
+        fh.Button('Next'),
+        hx_post=f'/ppt/{ppt_id}/{ppt_type}'
+    )
+    return get_dialog('Detalhes', form)
+
+@app.post('/ppts')
+async def add_ppt(frm: dict):
+    print(f'{frm=}')
+    infra = frm.pop('infrastructures')
+    str_id = get_or_create('streets', frm.get('street'))
+    dstr_id = get_or_create('districts', frm.get('district'))
+    city_id = get_or_create('cities', frm.get('city'))
+    rgn_id = get_or_create('regions', frm.get('region'))
+    
+    ppt = s.properties.insert({
+        'in_conodminium': transform_to(bool, frm.get('in_conodminium')),
+        'on_site': transform_to(bool, frm.get('on_site')),
+        'name': frm.get('name'),
+        'cep': frm.get('cep'),
+        'street_id': str_id,
+        'number': transform_to(int, frm.get('number')),
+        'district_id': dstr_id,
+        'city_id': city_id,
+        'region_id': rgn_id,
+        'retha_admin': transform_to(bool, frm.get('retha_admin')),
+        'under_construction': transform_to(bool, frm.get('under_construction')),
+        'location': frm.get('location')
+    })
+    if infra:
+        for i in infra:
+            if i:
+                idx = get_or_create('infrastructures', i)
+                
+                s.ppt_infrastructures.insert({
+                    'ppt_id': ppt.id,
+                    'infr_id': idx
+                })
+    return await get_ppt_dtls(ppt.id, int(frm.get('type')))
+
+@app.get('/ppt/{ppt_id}/{ppt_type}')
+def get_ppt(sess, ppt_id:int, ppt_type:int):
+    d = {
+        s.PropertyType.WAREHOUSE: 'warehouses',
+        s.PropertyType.LAND: 'lands',
+        s.PropertyType.OFFICE: 'offices',
+        s.PropertyType.SHOP: 'shops',
+    }
+    ppt_qry = f"""
+    SELECT p.id, in_conodminium, on_site, p.name, cep,
+    number, retha_admin, under_construction, location,
+    c.name as city, s.name as street, r.name as region
+    FROM properties as p
+    LEFT JOIN cities as c ON p.city_id = c.id
+    LEFT JOIN streets as s ON p.street_id = s.id
+    LEFT JOIN districts as d ON p.district_id = d.id
+    LEFT JOIN regions as r ON p.region_id = r.id
+    WHERE p.id = ?
+    """
+    ppt = s.db.q(ppt_qry, (ppt_id,))
+    qry = f"""
+    SELECT pd.*,
+    GROUP_CONCAT(u.title, ', ') as title
+    FROM property_details as pd
+    LEFT JOIN {d.get(ppt_type)} as u ON pd.id = u.pd_id
+    WHERE pd.ppt_id = ? and pd.type = ?
+    GROUP BY pd.id
+    """
+    pds = s.db.q(qry, (ppt_id, ppt_type))
+    print(f'{ppt=}')
+    print(pds)
+    add_flds = None
+    if pds:
+        df = pd.DataFrame(pds)
+        df['add_module'] = df.apply(
+            lambda row: f"<a hx-get='{row['id']}/{d.get(ppt_type)}/form' hx-target='#dialog' hx-swap='innerHTML'>Adiciona mais modulos</a>",
+            axis=1
+        )    
+        df = df.transpose()
+        add_flds = (
+            fh.NotStr(df.to_html(escape=False, header=False)),
+        )
+    return get_dialog(
+        'Imovel',
+        fh.Div(
+            fh.Div(fh.P(f'{k}: {v},') for k, v in ppt[0].items()),
+            add_flds,
+            fh.Button(
+                f'Cadastrar {const.PPT_TYPE.get(ppt_type)}',
+                type='submit',
+                hx_get=f'/frm/{ppt_id}/{ppt_type}'
+            )
+        )
+    )
+
+@app.post('/frm_dtls')
+def get_frm_dtls(d: dict):
+    ppt = list(s.properties.rows_where(
+        'cep = ? and number = ?',
+        (d.get('cep'), d.get('number')),
+        limit=1
+    ))
+    t = int(d.get('type'))
+    if ppt:
+        return fh.RedirectResponse(f'/ppt/{ppt[0]["id"]}/{t}', status_code=303)
+    frm = fh.Form(
+        fh.Hidden(name='type', value=t),
+        fh.Hidden(name='number', value=d.get('number')),
+        fh.Hidden(name='cep', value=d.get('cep')),
+        fh.CheckboxX(name='in_conodminium', role='switch', label='Em condomínio'),
+        fh.Input(name='name', placeholder='Nome de Condominio / Monousuário'),
+        fh.CheckboxX(name='on_site', role='switch', label='Publicar no Site'),
+        fh.CheckboxX(name='retha_admin', role='switch', label='Administração Retha'),
+        fh.CheckboxX(name='under_construction', role='switch', label='Em construção'),
+        fh.Label(
+            'CEP',
+            fh.Input(name='cep', value=d.get('cep'), disabled=True)),
+        fh.Label(
+            'Numero de casa',
+            fh.Input(name='number', value=d.get('number'), disabled=True)),
+        fh.Grid(
+            *(fh.Input(name=k, placeholder=v) for k, v in const.ADDRESS_FLDS.items() if k not in ('cep', 'number'))
+        ),
+        get_autocomplete_for('infrastructures', 'Infraestrutura', multiple=True),
+        fh.Input(name='location', placeholder='Localização'),
+        fh.Grid(
+            fh.Button('Back', hx_get='/frm_adrs'),
+            fh.Button('Next')
+        ),
+        hx_post='/ppts'
+    )
+    return get_dialog(f'Cadastrar {const.PPT_TYPE.get(t)}', frm)
+
+@app.get('/frm_adrs')
+async def get_frm_adrs():
+    frm = fh.Form(
+        fh.Fieldset(
+            fh.Label(
+                'Type:',
+                fh.Select(
+                    *mk_opts('type', const.PPT_TYPE),
+                    name='type',
+                )
+            ),
+            fh.Label(
+                'CEP', fh.Input(
+                    name='cep'
+                )
+            ),
+            fh.Label(
+                'Numero de casa', fh.Input(
+                    name='number'
+                )
+            ),
+            # *(fh.Label(v, fh.Input(name=k)) for k, v in const.ADDRESS_FLDS.items()),
+        ),
+        fh.Button('Next', hx_post='/frm_dtls', hx_target='#dialog')
+    )
+    return get_dialog('Cadastrar Imovel', frm)
+
+def mk_opts(nm, cs):
+    return (fh.Option(v, value=k) for k, v in cs.items())
+
+async def get_body_layout(*args, **kwargs):
     return fh.Container(
         fh.Div(
-            fh.Div(fh.Button('+', data_tooltip='Cadastrar imovel', type='button', hx_get='/ppt_form', hx_target='#dialog')),
-            fh.Div(short_fltr(), id='search-section'),
+            fh.Div(*args, **kwargs),
+            hx_swap_oob='true',
             id='body'
         )
     )
+
+async def get_secretary_view():
+    return await get_body_layout(
+        fh.Grid(
+            fh.Button(
+                '+ Novo Negócio',
+                hx_get='/new_task',
+                hx_target='#dialog'
+            ),
+            fh.Button(
+                '+ Imovel',
+                data_tooltip='Cadastrar imovel',
+                type='button',
+                hx_get='/frm_adrs',
+                hx_target='#dialog'
+            ),
+            fh.Button(
+                '+ Usuario',
+                hx_get='/register',
+                hx_target='#dialog'
+            ),
+        ),
+    )
+
+async def get_user_view():
+    return await get_body_layout(
+        short_fltr(), id='search-section'
+    )
+
+async def get_admin_view():
+    buttons = fh.Button('Cadastrar usuario', hx_get='/register', hx_target='#dialog')
+    return await get_body_layout(buttons)
 
 async def footer_section():
     """Footer section. Useful links"""
@@ -835,19 +1024,34 @@ async def footer_section():
         # fh.Grid(fh.P('Links Rápidos'), fh.P('Contato')),
         fh.P(f'Retha ©{cur_year} - Todos os direitos reservados.'),
         id='footer')
-    
+
 scripts = (
-    fh.Script(src=f"https://maps.googleapis.com/maps/api/js?key={GOOGLE_API}&callback=initMap&v=3&libraries=marker", defer=True),
-    fh.Script(src="https://unpkg.com/@googlemaps/markerclusterer/dist/index.min.js"),
+    fh.Script(
+        src=f"https://maps.googleapis.com/maps/api/js?key={s.GOOGLE_API}&callback=initMap&v=3&libraries=marker",
+        defer=True
+    ),
+    fh.Script(
+        src="https://unpkg.com/@googlemaps/markerclusterer/dist/index.min.js"
+    ),
     
 )
 
 from fastcore.xtras import timed_cache
 
+VIEWS = {
+    s.Role.ADMIN: get_admin_view,
+    s.Role.BROKER: get_user_view,
+    s.Role.SECRETARY: get_secretary_view,
+    s.Role.USER: get_user_view,
+    const.ANONIM: get_user_view,
+}
 
 # @timed_cache(seconds=60)
 async def home(sess):
-    return (fh.Title(f"Retha - {DESCR}"),
+    role = sess.get('auth_r', const.ANONIM)
+    print(f'{role=}')
+    body_section = VIEWS.get(role)
+    return (fh.Title(f"Retha - {const.DESCR}"),
         *scripts,
         fh.Main(
             await header_section(sess),

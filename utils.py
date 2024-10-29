@@ -9,7 +9,7 @@ async def save_img(ppt_id: int, img: UploadFile) -> None:
     # Save the image file to the server
     with img_path.open("wb") as f:
         f.write(await img.read())
-    ppt_images.insert({'ppt_id': ppt_id,
+    ppt_images.insert({'pd_id': ppt_id,
                        'img': f'/images/{img_filename}'})
 
 def get_or_create(tbl: str, name: str) -> int:
@@ -32,3 +32,10 @@ def get_or_create(tbl: str, name: str) -> int:
     }
     itm = d[tbl].insert(name=name)
     return itm['id']
+
+def transform_to(t, item: str):
+    try:
+        item = t(item)
+    except ValueError:
+        return None
+    return item

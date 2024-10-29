@@ -8,6 +8,10 @@ nav {
   margin-right: auto;
 }
 
+#comparisons {
+  padding-top: 20px;
+  padding-bottom: 20px;
+}
 .map {
   /* width: 50dvh; */
   height: 100vh;
@@ -90,10 +94,10 @@ nav {
   width: 100%;
   max-width: 300px;
   border: 1px solid #ccc;
-  max-height: 150px;
+  max-height: 450px;
   overflow-y: auto;
   background-color: white;
-  position: absolute;
+  /* position: absolute; */
   z-index: 1000;  /* Ensure it stays above other content */
 }
 
@@ -243,19 +247,20 @@ a {
   z-index: 1; /* Keeps header above other table content */
 }
 
-.selected-container {
+/* .selected-container {
   margin-top: 10px;
   padding: 5px;
   border: 1px solid #ccc;
   min-height: 30px;
-}
+} */
 
 .selected-item {
   display: inline-block;
   background-color: #e0e0e0;
   padding: 5px;
-  margin-right: 5px;
-  border-radius: 3px;
+  margin-bottom: var(--pico-spacing);
+  margin-left: 5px;
+  border-radius: 10px;
 }
 
 .selected-item button {
@@ -263,5 +268,6 @@ a {
   border: none;
   color: red;
   cursor: pointer;
-  margin-left: 5px;
+  margin: 0px;
+  padding: 5px;
 }

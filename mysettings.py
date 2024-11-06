@@ -24,6 +24,9 @@ shops = db.t.shops
 users = db.t.users
 comparisons = db.t.comparisons
 warehouse_comparisons = db.t.warehouse_comparisons
+land_comparisons = db.t.land_comparisons
+shop_comparisons = db.t.shop_comparisons
+office_comparisons = db.t.office_comparisons
 ppt_images = db.t.ppt_images
 ppt_infrastructures = db.t.ppt_infrastructures
 cities = db.t.cities
@@ -33,6 +36,7 @@ districts = db.t.districts
 infrastructures = db.t.infrastructures
 notes = db.t.notes
 tasks = db.t.tasks
+task_params = db.t.task_params
 
 class Avcb(IntEnum):
     opt1 = auto()
@@ -90,11 +94,6 @@ class Comparison:
     status: int = Status.ACTIVE
 
 @fh.dataclass
-class WarehouseComparison:
-    comparison_id: int  # foreign key to comparisons
-    warehouse_id: int  # foreign key to warehouses
-
-@fh.dataclass
 class Property:
     in_conodminium: bool
     on_site: bool
@@ -112,7 +111,7 @@ class Property:
 @fh.dataclass
 class PropertyDetails:
     ppt_id: int  # foreign key to Property
-    type: int  # Use PropertyType
+    ppt_type: int  # Use PropertyType
     description: str
     iptu: float
     condominium: float
@@ -123,16 +122,20 @@ class Task:
     client_id: int
     broker_id: int
     initial_dscr: str  # initial reqeust
-    broker: int
-    infrastructure: int
+    date: str
+
+@fh.dataclass
+class TaskParams:
+    task_id: int
     name: int
-    commercial: int
-    type: int
+    ad_type: int
+    ppt_type: int  # Use PropertyType
     in_conodminium: int
-    city: int
-    region: int
-    district: int
-    zone: int
+    under_construction: int
+    city_id: int
+    region_id: int
+    district_id: int
+    # zone: int
     price_min: int
     price_max: int
     area_min: int
@@ -152,7 +155,6 @@ class Task:
     energy_min: int
     energy_max: int
     avcb: int
-    under_construction: int
     date: str
 
 @fh.dataclass
@@ -304,11 +306,35 @@ def _initialize_db():
             ]
         )
         warehouse_comparisons.create(
-            id=int, comparison_id=int, warehouse_id=int,
+            id=int, comparison_id=int, unit_id=int,
             pk='id',
             foreign_keys=[
                 ('comparison_id','comparisons', 'id'),
                 ('warehouse_id', 'warehouses', 'id')
+            ]
+        )
+        land_comparisons.create(
+            id=int, comparison_id=int, unit_id=int,
+            pk='id',
+            foreign_keys=[
+                ('comparison_id','comparisons', 'id'),
+                ('land_id', 'lands', 'id')
+            ]
+        )
+        office_comparisons.create(
+            id=int, comparison_id=int, unit_id=int,
+            pk='id',
+            foreign_keys=[
+                ('comparison_id','comparisons', 'id'),
+                ('office_id', 'offices', 'id')
+            ]
+        )
+        shop_comparisons.create(
+            id=int, comparison_id=int, unit_id=int,
+            pk='id',
+            foreign_keys=[
+                ('comparison_id','comparisons', 'id'),
+                ('shop_id', 'shops', 'id')
             ]
         )
     if tasks not in db.t:
@@ -316,14 +342,21 @@ def _initialize_db():
                   name='tasks',
                   foreign_keys=[('client_id', 'users', 'id'),
                                 ('broker_id', 'users', 'id')])
+        db.create(
+            cls=TaskParams,
+            name='task_params',
+            foreign_keys=[
+                ('task_id', 'tasks', 'id'),
+            ]
+        )
 
 _initialize_db()
 PPT_DC, WRH_DC, USER_DC = properties.dataclass(), warehouses.dataclass(), users.dataclass()
 property_details.dataclass()
-# users.drop()
-print(ppt_infrastructures())
-print(infrastructures())
-print(property_details())
-print(properties())
+# comparisons.drop()
+# warehouse_comparisons.drop()
+# land_comparisons.drop()
+# shop_comparisons.drop()
+# office_comparisons.drop()
 
-
+print(task_params())

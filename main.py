@@ -43,13 +43,18 @@ fh.setup_toasts(app)
 @app.get('/clr_fltr')
 def clr_fltr():
     frm = short_fltr()
-    return fh.Div(frm, hx_swap_oob='true', id='search-section')
+    return fh.Div(frm, hx_swap_oob='true', id='body')
 
 @app.post('/cls_fltr')
 def cls_fltr(d: dict):
     frm = short_fltr()
     frm = fh.fill_form(frm, d)
-    return fh.Div(frm, hx_swap_oob='true', id='search-section')
+    print(f'cls fltr {d=}')
+    return fh.Div(
+        frm,
+        hx_swap_oob='true',
+        id='body'
+    ), fh.Div(id='sidebar', hx_swap_oob='true')
 
 @app.get('/cls_dialog')
 def cls_dialog():
@@ -126,10 +131,8 @@ async def get_register(sess):
 
 @app.post('/register')
 async def register(sess, user:s.User):
-    print(f'{user=}')
     u = s.users.insert(user)
     if not sess.get('auth_r'):
-        print(f'{u.role}')
         sess['auth'] = u.id
         sess['auth_r'] = u.role
         body_section = VIEWS.get(u.role)
@@ -139,7 +142,7 @@ async def register(sess, user:s.User):
             ), id="login-section", hx_swap_oob='true'
         ), fh.Div(id='dialog', hx_swap_oob='true'), await body_section()
     fh.add_toast(sess, f'User was registrered', 'success')
-    return fh.Div(id='dialog', hx_swap_oob='true')
+    return fh.Div(id='dialog', hx_swap_oob='true'), fh.Div(fh.Input(name='users', value=f'{u.name} - {u.email} - {u.id}', disabled=True), fh.Hidden(name='users', value=f'{u.name} - {u.email} - {u.id}'), id='user', hx_swap_oob='true')
 
 @app.get("/logout")
 async def logout(sess):
@@ -167,27 +170,26 @@ async def ppt_imgs(ppt):
     images = [(fh.Img(src=f'data:image/jpeg;base64,{image}', alt='Image description', cls='carousel-image')) for image in images_list]
     return images
 
-@app.get('/{ad_type}/properties/{ppt_id}')
-async def ppt_dtls(sess, ad_type: int, ppt_id: int):
-    print(f'{ad_type=}')
-    print(f'{type(ad_type)=}')
-    
+@app.get('/{ad_type}/properties/{ppt_id}/{ppt_type}')
+async def ppt_dtls(sess, ad_type: int, ppt_id: int, ppt_type: int):
     price_type = 'rent'
+    ppt_table = const.PPT_TABLE.get(ppt_type)
     if ad_type == s.AdType.SELL:
         price_type = 'sell'
     qry = f"""
     SELECT m.id, title, flr_capacity, height, width, abl,
     office_area, docks, energy, available,
-    p.type, p.description,
-    c.name as city, s.name as street,
-    (p.iptu*m.abl) as iptu,
-    (p.condominium*m.abl) as condominium,
-    (p.foro*m.abl) as foro,
+    pd.ppt_type, pd.description,
+    c.name as city, s.name as street, pd.id as pd_id,
+    (pd.iptu*m.abl) as iptu,
+    (pd.condominium*m.abl) as condominium,
+    (pd.foro*m.abl) as foro,
     (m.{price_type}*m.abl) as rent,
     (iptu + condominium + foro + {price_type}) * abl as price,
     (m.abl - m.office_area) * 100 / m.abl as efficiency
-    FROM modules as m
-    LEFT JOIN properties as p ON m.ppt_id = p.id
+    FROM {ppt_table} as m
+    LEFT JOIN property_details as pd ON m.pd_id = pd.id
+    LEFT JOIN properties as p ON pd.ppt_id = p.id
     LEFT JOIN cities as c ON p.city_id = c.id
     LEFT JOIN streets as s ON p.street_id = s.id
     WHERE p.id = ?
@@ -201,13 +203,13 @@ async def ppt_dtls(sess, ad_type: int, ppt_id: int):
         df[k] = df.apply(v, axis=1)
     tbl = df[list(const.FLDS_RENAME[model])].rename(columns=const.FLDS_RENAME[model]).transpose()
     user_id = sess['auth']
-    imgs = s.ppt_images.rows_where('ppt_id = ?', (ppt_id,))
+    # imgs = s.ppt_images.rows_where('pd_id = ?', (ppt_id,))
     return fh.Titled(
-        f'{const.PPT_TYPE.get(ppt["type"])} RET{ppt_id:03d}',
-        fh.Div(
-            carousel(imgs),
-            cls='property'
-        ),
+        f'{const.PPT_TYPE.get(ppt["ppt_type"])} RET{ppt_id:03d}',
+        # fh.Div(
+        #     carousel(imgs),
+        #     cls='property'
+        # ),
         fh.P(f"{ppt['street']} - {ppt['city']}", id='address'),
         # fh.Group(*(fh.Div(f'{v}: {ppt.__dict__[k]}', id=k) for k, v in costs_const().items()), id='costs'),
         fh.Label(fh.H2('Descricao:'), _for='description'),
@@ -222,27 +224,30 @@ async def ppt_dtls(sess, ad_type: int, ppt_id: int):
         fh.Button(
             'Adicionar à comparação',
             type='submit',
-            hx_post=f'/{user_id}/{ad_type}/{ppt_id}/comparison',
+            hx_post=f'/{user_id}/{ad_type}/{ppt['pd_id']}/{ppt_type}/comparison',
             hx_include='#modules',
             hx_swap='outerHTML'
         ),
         fh.Button('Agendar visita', type='submit', hx_post=f'/{user_id}/{ad_type}/{ppt_id}/visit', hx_include='#modules'),
     ), fh.Script(src='/js/carouselScroll.js')
 
-@app.post('/{user_id}/{ad_type}/{ppt_id}/comparison')
-async def add_comparison(req, sess, user_id: str, ad_type: int, ppt_id: int, d: dict):
+@app.post('/{user_id}/{ad_type}/{pd_id}/{ppt_type}/comparison')
+async def add_comparison(req, sess, user_id: str, ad_type: int, pd_id: int, ppt_type: int, d: dict):
     mdl_ids = d.values()
-    cmp_cls = s.Comparison(user_id=user_id, ppt_id=ppt_id, ad_type=ad_type, date=dt.now().strftime('%d/%m/%Y, %H:%M:%S'))
+    cmp_cls = s.Comparison(user_id=user_id, pd_id=pd_id, ad_type=ad_type, date=dt.now().strftime('%d/%m/%Y, %H:%M:%S'))
     cmp = s.comparisons.insert(cmp_cls)
+    cmp_table = const.CMP_TABLE.get(ppt_type)
     for id in mdl_ids:
-        s.comparison_modules.insert(comparison_id=cmp['id'], module_id=id)
-    return fh.A('Ver comparações', type='submit', href=f'/{user_id}/comparisons/{int(s.Status.ACTIVE)}', target='blank')
+        cmp_table.insert(comparison_id=cmp['id'], unit_id=id)
+    return fh.A('Ver comparações', type='submit', href=f'/{user_id}/comparisons/{ppt_type}/{int(s.Status.ACTIVE)}', target='blank')
 
-@app.get('/{user_id}/comparisons/{status}')
-async def get_comparisons(user_id: str, status: str):
-    qry = """
+@app.get('/{user_id}/comparisons/{ppt_type}/{status}')
+async def get_comparisons(user_id: str, ppt_type: int, status: int):
+    table = const.PPT_TABLE.get(ppt_type)
+    cmp_table = const.CMP_TABLE.get(ppt_type)
+    qry = f"""
     SELECT cmp.id, ppt.name, d.name as district, c.name as city, ppt.location,
-    ppt.iptu, ppt.foro, ppt.condominium,
+    pd.iptu, pd.foro, pd.condominium, pd.ppt_type,
     GROUP_CONCAT(m.title, ', ') as title,
     MIN(m.flr_capacity) as min_flr_capacity,
     MAX(m.flr_capacity) as max_flr_capacity,
@@ -256,15 +261,16 @@ async def get_comparisons(user_id: str, status: str):
     MAX(m.width) as max_width,
     SUM(m.docks) as docks,
     SUM(m.abl) as abl,
-    SUM(m.abl * (m.rent + ppt.iptu + ppt.foro + ppt.condominium)) as price,
+    SUM(m.abl * (m.rent + pd.iptu + pd.foro + pd.condominium)) as price,
     SUM(m.office_area) as office_area,
     (abl - office_area) * 100 / abl as efficiency
     FROM comparisons as cmp
-    LEFT JOIN properties as ppt ON cmp.ppt_id = ppt.id
+    LEFT JOIN property_details as pd ON cmp.pd_id = pd.id
+    LEFT JOIN properties as ppt ON pd.ppt_id = ppt.id
     LEFT JOIN districts AS d ON ppt.district_id = d.id
     LEFT JOIN cities AS c ON ppt.city_id = c.id
-    LEFT JOIN comparison_modules as cmp_m ON cmp.id = cmp_m.comparison_id
-    LEFT JOIN modules as m ON cmp_m.module_id = m.id
+    LEFT JOIN {cmp_table} as cmp_m ON cmp.id = cmp_m.comparison_id
+    LEFT JOIN {table} as m ON cmp_m.unit_id = m.id
     WHERE cmp.user_id = ? AND status = ?
     GROUP BY cmp.id
     """
@@ -283,7 +289,7 @@ async def get_comparisons(user_id: str, status: str):
             fh.Form(
                 fh.NotStr(tbl.to_html(escape=False, header=False)),
                 fh.Button('Download site selection'),
-                action='/download_pdf', method='post',
+                action=f'/{ppt_type}/download_pdf', method='post',
                 id='comparisons', cls='table-container'),
             fh.Button('Arquivar', type='submit', hx_post=f'/{user_id}/comparisons/add_archive', hx_include='#comparisons'),
             fh.Button('Agendar visita', type='submit', hx_post=f'/{user_id}/{const.NA}/{const.ZERO}/visit', hx_include='#comparisons'),
@@ -295,8 +301,8 @@ async def get_comparisons(user_id: str, status: str):
 async def delete_pdf(fpath: str):
     await aiofiles.os.remove(fpath)
 
-@app.post("/download_pdf")
-async def download_pdf(d: dict):
+@app.post("/{ppt_type}/download_pdf")
+async def download_pdf(d: dict, ppt_type: int):
     cmp_ids = tuple(d.values())
 
     now = dt.now()
@@ -304,7 +310,7 @@ async def download_pdf(d: dict):
 
     # File path
     output_pdf = f'./pdfs/{date}_dynamic_output.pdf'
-    create_pdf(cmp_ids, output_pdf)
+    create_pdf(cmp_ids, output_pdf, ppt_type)
     task = BackgroundTask(delete_pdf, output_pdf)
     return fh.FileResponse(
         f'{output_pdf}',
@@ -314,14 +320,15 @@ async def download_pdf(d: dict):
         background=task
     )
 
-def create_pdf(cmp_ids, output_pdf):
+def create_pdf(cmp_ids, output_pdf, ppt_type):
     """Create pdf using reportlab."""
     # cmp_ids = tuple(d.values())
     placeholders = ', '.join(['?' for _ in cmp_ids])
-    
+    table = const.PPT_TABLE.get(ppt_type)
+    cmp_table = const.CMP_TABLE.get(ppt_type)
     qry = f"""
-    SELECT cmp.id, ppt.id, ppt.name, d.name as district, c.name as city, ppt.location,
-    ppt.iptu, ppt.foro, ppt.condominium,
+    SELECT cmp.id, ppt.name, d.name as district, c.name as city, ppt.location,
+    pd.iptu, pd.foro, pd.condominium, pd.ppt_type,
     GROUP_CONCAT(m.title, ', ') as title,
     MIN(m.flr_capacity) as min_flr_capacity,
     MAX(m.flr_capacity) as max_flr_capacity,
@@ -335,16 +342,17 @@ def create_pdf(cmp_ids, output_pdf):
     MAX(m.width) as max_width,
     SUM(m.docks) as docks,
     SUM(m.abl) as abl,
-    SUM(m.abl * (m.rent + ppt.iptu + ppt.foro + ppt.condominium)) as price,
+    SUM(m.abl * (m.rent + pd.iptu + pd.foro + pd.condominium)) as price,
     SUM(m.abl * m.rent) / SUM(m.abl) as rent,
     SUM(m.office_area) as office_area,
     (abl - office_area) * 100 / abl as efficiency
     FROM comparisons as cmp
-    LEFT JOIN comparison_modules as cmp_m ON cmp.id = cmp_m.comparison_id
-    LEFT JOIN modules as m ON cmp_m.module_id = m.id
-    LEFT JOIN properties as ppt ON cmp.ppt_id = ppt.id
-    LEFT JOIN districts as d ON ppt.district_id = d.id
-    LEFT JOIN cities as c ON ppt.city_id = c.id
+    LEFT JOIN property_details as pd ON cmp.pd_id = pd.id
+    LEFT JOIN properties as ppt ON pd.ppt_id = ppt.id
+    LEFT JOIN districts AS d ON ppt.district_id = d.id
+    LEFT JOIN cities AS c ON ppt.city_id = c.id
+    LEFT JOIN {cmp_table} as cmp_m ON cmp.id = cmp_m.comparison_id
+    LEFT JOIN {table} as m ON cmp_m.unit_id = m.id
     WHERE cmp.id IN ({placeholders})
     GROUP BY cmp.id
     """
@@ -353,12 +361,13 @@ def create_pdf(cmp_ids, output_pdf):
     GROUP_CONCAT(DISTINCT pi.img) as img,
     GROUP_CONCAT(DISTINCT i.name) as infr
     FROM comparisons as c
-    LEFT JOIN ppt_images as pi ON c.ppt_id = pi.ppt_id
-    LEFT JOIN ppt_infrastructures as p ON c.ppt_id = p.ppt_id
-    LEFT JOIN infrastructures as i ON p.infr_id = i.id
+    LEFT JOIN ppt_images as pi ON c.pd_id = pi.pd_id
+    LEFT JOIN property_details as pd ON c.pd_id = pd.id
+    LEFT JOIN properties as p ON pd.id = p.id
+    LEFT JOIN ppt_infrastructures as p_i ON p.id = p_i.ppt_id
+    LEFT JOIN infrastructures as i ON p_i.infr_id = i.id
     WHERE c.id IN ({placeholders})
     GROUP BY c.id
-    
     """
     db_imgs = s.db.q(qry_img, cmp_ids)
     db_q = s.db.q(qry, cmp_ids)
@@ -612,26 +621,29 @@ def add_archive(user_id: str, table: str, d: dict):
         s.db.q(qry, ids)
     return 'Done'
 
-@app.get('/comparisons/{id}')
-async def get_comparison(id: int):
-    qry = """
+@app.get('/comparisons/{id}/{ppt_type}')
+async def get_comparison(id: int, ppt_type: int):
+    table = const.PPT_TABLE.get(ppt_type)
+    cmp_table = const.CMP_TABLE.get(ppt_type)
+    qry = f"""
     SELECT  title, flr_capacity, height, width, abl,
     office_area, docks, energy, available,
-    p.id, p.type, p.description, ct.name as city,
+    pd.id, ppt_type, description, c.name as city,
     s.name as street,
-    (p.iptu*m.abl) as iptu,
-    (p.condominium*m.abl) as condominium,
-    (p.foro*m.abl) as foro,
+    (iptu*m.abl) as iptu,
+    (condominium*m.abl) as condominium,
+    (foro*m.abl) as foro,
     (m.rent*m.abl) as rent,
     (iptu + condominium + foro + rent) * abl as price,
     (m.abl - m.office_area) * 100 / m.abl as efficiency
-    FROM comparisons as c
-    LEFT JOIN properties as p ON c.ppt_id = p.id
-    LEFT JOIN cities as ct ON p.city_id = ct.id
-    LEFT JOIN streets as s ON p.street_id = s.id
-    LEFT JOIN comparison_modules as cm ON c.id = cm.comparison_id
-    LEFT JOIN modules as m ON cm.module_id = m.id
-    WHERE c.id = ?
+    FROM comparisons as cmp
+    LEFT JOIN property_details as pd ON cmp.pd_id = pd.id
+    LEFT JOIN properties as ppt ON pd.ppt_id = ppt.id
+    LEFT JOIN streets AS s ON ppt.street_id = s.id
+    LEFT JOIN cities AS c ON ppt.city_id = c.id
+    LEFT JOIN {cmp_table} as cmp_m ON cmp.id = cmp_m.comparison_id
+    LEFT JOIN {table} as m ON cmp_m.unit_id = m.id
+    WHERE cmp.id = ?
     """
     db_q = s.db.q(qry, (id,))
     ppt = db_q[0]
@@ -642,11 +654,11 @@ async def get_comparison(id: int):
     WHERE p.ppt_id = ?
     """
     infras = s.db.q(infra_qry, (ppt['id'],))
-    imgs = s.ppt_images.rows_where('ppt_id = ?', (ppt['id'],))
+    imgs = s.ppt_images.rows_where('pd_id = ?', (ppt['id'],))
     df = pd.DataFrame(db_q)
     tbl = df[list(const.FLDS_RENAME['modules'])].rename(columns=const.FLDS_RENAME['modules']).transpose()
     item = fh.Titled(
-        f'{const.PPT_TYPE.get(ppt["type"])} RET{ppt["id"]:03d}',
+        f'{const.PPT_TYPE.get(ppt["ppt_type"])} RET{ppt["id"]:03d}',
         fh.Div(
             carousel(imgs),
             cls='property'
@@ -689,10 +701,15 @@ async def header_section(sess):
     role = sess.get('auth_r', const.ANONIM)
     return fh.Container(fh.Header(
         fh.Nav(fh.P(fh.Strong(fh.A("Retha", href="/", id='retha')), id='Retha'),
-               fh.P(fh.Strong(fh.AX('Tasks', '/new_task', 'body'))),
+               fh.P(fh.Strong(fh.AX('Tasks', '/tasks', 'body'))),
                fh.P(
                    fh.Strong(
-                       fh.A("Comparisons", href=f"{sess.get('auth')}/comparisons/{s.Status.ACTIVE}", id='profile', target='blank')
+                       fh.A(
+                           "Comparisons",
+                           href=f"{sess.get('auth')}/comparisons/{s.PropertyType.WAREHOUSE}/{s.Status.ACTIVE}",
+                           id='profile',
+                           target='blank'
+                        )
                     ), id='Profile'),
                login_element)), id='header')
 
@@ -708,19 +725,19 @@ def show_filters(d: dict):
     return fh.Div(
         frm,
         cls='sidebar',
+        id='sidebar',
+        hx_swap_oob='true',
     )
 
 @app.post('/search_ppts')
 async def get_locations(d:dict):
-    commercial = d['commercial']
-    ad_type = s.AdType.RENT
+    ad_type = int(d['ad_type'])
+    ppt_type = const.PPT_TABLE.get(int(d['ppt_type']))
     price_type = 'rent'
-    if int(commercial) == s.AdType.SELL:
+    if ad_type == s.AdType.SELL:
         price_type = 'sell'
-        ad_type = s.AdType.SELL
-        
     qry = f"""
-    SELECT p.id, p.location, p.name, p.type,
+    SELECT p.id, p.location, p.name, pd.ppt_type,
     c.name AS city, s.name AS street,
     GROUP_CONCAT(pi.img) AS images,
     SUM(m.abl) as max_area,
@@ -729,29 +746,30 @@ async def get_locations(d:dict):
     FROM properties AS p
     LEFT JOIN cities AS c ON p.city_id = c.id
     LEFT JOIN streets AS s ON p.street_id = s.id
-    LEFT JOIN ppt_images AS pi ON p.id = pi.ppt_id
-    LEFT JOIN modules AS m ON p.id = m.ppt_id
+    LEFT JOIN property_details AS pd ON p.id = pd.ppt_id
+    LEFT JOIN ppt_images AS pi ON pd.id = pi.pd_id
+    LEFT JOIN {ppt_type} AS m ON pd.id = m.pd_id
     GROUP BY p.id
     """
     ppts = s.db.q(qry)
     locations = list(map(ppt_serializer, ppts))
     frm = short_fltr()
-    d['commercial'] = ad_type
-    # d['under_construction'] = CHOICE_TYPE[int(d['under_construction'])]
     frm = fh.fill_form(frm, d)
+    print(f'locations {d=}')
     return (fh.Grid(fh.Ul(id="location-list"),
                     fh.Div(id="map", cls='map')),
-            fh.Script(map_locations_script(locations, commercial))), fh.Div(frm, hx_swap_oob='true', id='search-section')
+            fh.Script(map_locations_script(locations, ad_type))), fh.Div(frm, hx_swap_oob='true', id='body')
 
 @app.get('/new_task')
-def get_new_task(sess):
+def get_new_task(sess, req):
     role = sess.get('auth_r')
     clients = fh.Label(
         'Cliente',
         fh.Grid(
             get_autocomplete_for('users', 'Cliente'),
-            fh.Button('+', hx_get='/register', hx_target='#dialog')
-        )
+            fh.Button('+', hx_get='/register', data_tooltip='Cadastrar Usuario', hx_target='#dialog'),
+            id='user'
+        ),
     )
     if role == s.Role.BROKER:
         brokers = fh.Hidden(name='broker', value=sess['auth'])
@@ -769,20 +787,106 @@ def get_new_task(sess):
         fh.Div(id='register', hx_swap='outerHTML'),
         clients,
         brokers,
-        fltr_flds(),
-        fh.Button('Salvar e ver opcoes', type='submit', hx_post='/new_task', hx_target='#result')
+        fh.Label('Descrição', fh.Textarea(name='initial_dscr', rows=10)),
+        # fltr_flds(),
+        fh.Button('Salvar', type='submit',),
+        hx_post='/new_task', hx_target='#result'
     )
-    return get_dialog('Novo Negócio', frm)
+    return fh.Titled('Novo Negócio', frm)
 
 @app.post('/new_task')
-def create_new_task(d: dict):
-    print(f'{d=}')
+def create_new_task(sess, d: dict):
+    l = d['users'].split(' - ')
+    if len(l) == 3:
+        u_id = l[-1]
+        task = s.tasks.insert({
+            'client_id': u_id,
+            'broker_id': d.get('broker'),
+            'initial_dscr': d.get('initial_dscr'),
+            'date': dt.now().strftime('%d/%m/%Y, %H:%M:%S'),
+        })
+        btn = fh.Button('Salva e busca', type='button', hx_post=f'/tasks/{task["id"]}', hx_target='#result')
+        frm = mk_fltr(btn)
+        srch = fh.fill_form(frm, task)
+        fh.add_toast(sess, "Negócio adicionado.", 'success')
+        return fh.Div(
+            fh.Label('Descrição', fh.P(d.get('initial_dscr'))),
+            fh.Div(
+                srch,
+                cls='sidebar'
+            ),
+            id='result'
+        )
+
+@app.post('/tasks/{task_id}')
+async def add_srch(task_id: int, d: dict):
+    task_params = s.task_params.insert({
+        'task_id': task_id,
+        'city_id': get_or_create('cities', d.get('cities')),
+        'region_id': get_or_create('regions', d.get('regions')),
+        'district_id': get_or_create('districts', d.get('districts')),
+        'date': dt.now().strftime('%d/%m/%Y, %H:%M:%S'),
+        'ad_type': int(d.get('ad_type')),
+        'ppt_type': int(d.get('ppt_type')),
+        'in_conodminium': int(d.get('in_conodminium')),
+        'under_construction': int(d.get('under_construction')),
+        'price_min': int(d.get('price_min')),
+        'price_max': int(d.get('price_max')),
+        'area_min': int(d.get('area_min')),
+        'area_max': int(d.get('area_max')),
+        'height_min': int(d.get('height_min')),
+        'height_max': int(d.get('height_max')),
+        'efficiency_min': int(d.get('efficiency_min')),
+        'efficiency_max': int(d.get('efficiency_max')),
+        'abl_min': int(d.get('abl_min')),
+        'abl_max': int(d.get('abl_max')),
+        'doks_min': int(d.get('doks_min')),
+        'doks_max': int(d.get('doks_max')),
+        'flr_capacity_min': int(d.get('flr_capacity_min')),
+        'flr_capacity_max': int(d.get('flr_capacity_max')),
+        'office_area_min': int(d.get('office_area_min')),
+        'office_area_max': int(d.get('office_area_max')),
+        'energy_min': int(d.get('energy_min')),
+        'energy_max': int(d.get('energy_max')),
+        'avcb': int(d.get('avcb')),
+    })
+    return await get_locations(d)
+    # return fh.RedirectResponse(f'/tasks/{task_id}', status_code=303)
+
+@app.get('/tasks/{task_id}')
+async def get_task(task_id: int):
+    d = list(s.task_params.rows_where('task_id = ?', (task_id,)))[0]
+    d['cities'] = s.cities[d.get('city_id')]['name']
+    d['regions'] = s.regions[d.get('region_id')]['name']
+    d['districts'] = s.districts[d.get('district_id')]['name']
+    d['in_conodminium'] = str(d.get('in_conodminium'))
+    d['under_construction'] = str(d.get('under_construction'))
+    d['ad_type'] = str(d.get('ad_type'))
+    d['ppt_type'] = str(d.get('ppt_type'))
+    d['avcb'] = str(d.get('avcb'))
+    # fltr = mk_fltr()
+    # frm = fh.fill_form(fltr, d)
+    srch_d = {}
+    for k, v in d.items():
+        if k.endswith('_min') or k.endswith('_max'):
+            srch_d[f'{k}_handler'] = str(v)
+            srch_d[k] = str(v)
+            
+        else:
+            srch_d[k] = v
+
+    return await get_locations(srch_d)
+    # return fh.Div(frm, cls='sidebar', id='sidebar'), fh.Div(fh.P('map and applied filters'), id='result')
+
+@app.get('/tasks')
+def get_tasks_list():
+    return fh.Ul(*(fh.Li(fh.AX(f'{t["date"]}', f'/tasks/{t["id"]}', 'result')) for t in s.tasks()))
 
 @app.post('/ppt/{ppt_id}/{ppt_type}')
 async def add_ppt_dtls(ppt_id:int, ppt_type: int, frm: dict):
     ppt_d = s.property_details.insert({
         'ppt_id': ppt_id,
-        'type': ppt_type,
+        'ppt_type': ppt_type,
         'description': frm.get('description'),
         'iptu': transform_to(float, frm.get('iptu')),
         'condominium': transform_to(float, frm.get('condominium')),
@@ -821,7 +925,6 @@ async def get_ppt_dtls(ppt_id:int, ppt_type: int):
 
 @app.post('/ppts')
 async def add_ppt(frm: dict):
-    print(f'{frm=}')
     infra = frm.pop('infrastructures')
     str_id = get_or_create('streets', frm.get('street'))
     dstr_id = get_or_create('districts', frm.get('district'))
@@ -851,7 +954,7 @@ async def add_ppt(frm: dict):
                     'ppt_id': ppt.id,
                     'infr_id': idx
                 })
-    return await get_ppt_dtls(ppt.id, int(frm.get('type')))
+    return await get_ppt_dtls(ppt.id, int(frm.get('ppt_type')))
 
 @app.get('/ppt/{ppt_id}/{ppt_type}')
 def get_ppt(sess, ppt_id:int, ppt_type:int):
@@ -878,12 +981,10 @@ def get_ppt(sess, ppt_id:int, ppt_type:int):
     GROUP_CONCAT(u.title, ', ') as title
     FROM property_details as pd
     LEFT JOIN {d.get(ppt_type)} as u ON pd.id = u.pd_id
-    WHERE pd.ppt_id = ? and pd.type = ?
+    WHERE pd.ppt_id = ? and pd.ppt_type = ?
     GROUP BY pd.id
     """
     pds = s.db.q(qry, (ppt_id, ppt_type))
-    print(f'{ppt=}')
-    print(pds)
     add_flds = None
     if pds:
         df = pd.DataFrame(pds)
@@ -915,11 +1016,11 @@ def get_frm_dtls(d: dict):
         (d.get('cep'), d.get('number')),
         limit=1
     ))
-    t = int(d.get('type'))
+    ppt_type = int(d.get('ppt_type'))
     if ppt:
-        return fh.RedirectResponse(f'/ppt/{ppt[0]["id"]}/{t}', status_code=303)
+        return fh.RedirectResponse(f'/ppt/{ppt[0]["id"]}/{ppt_type}', status_code=303)
     frm = fh.Form(
-        fh.Hidden(name='type', value=t),
+        fh.Hidden(name='ppt_type', value=ppt_type),
         fh.Hidden(name='number', value=d.get('number')),
         fh.Hidden(name='cep', value=d.get('cep')),
         fh.CheckboxX(name='in_conodminium', role='switch', label='Em condomínio'),
@@ -944,7 +1045,7 @@ def get_frm_dtls(d: dict):
         ),
         hx_post='/ppts'
     )
-    return get_dialog(f'Cadastrar {const.PPT_TYPE.get(t)}', frm)
+    return get_dialog(f'Cadastrar {const.PPT_TYPE.get(ppt_type)}', frm)
 
 @app.get('/frm_adrs')
 async def get_frm_adrs():
@@ -953,8 +1054,8 @@ async def get_frm_adrs():
             fh.Label(
                 'Type:',
                 fh.Select(
-                    *mk_opts('type', const.PPT_TYPE),
-                    name='type',
+                    *mk_opts('ppt_type', const.PPT_TYPE),
+                    name='ppt_type',
                 )
             ),
             fh.Label(
@@ -979,9 +1080,10 @@ def mk_opts(nm, cs):
 async def get_body_layout(*args, **kwargs):
     return fh.Container(
         fh.Div(
-            fh.Div(*args, **kwargs),
+            *args,
             hx_swap_oob='true',
-            id='body'
+            id='body',
+            **kwargs,
         )
     )
 
@@ -991,7 +1093,7 @@ async def get_secretary_view():
             fh.Button(
                 '+ Novo Negócio',
                 hx_get='/new_task',
-                hx_target='#dialog'
+                hx_target='#result'
             ),
             fh.Button(
                 '+ Imovel',
@@ -1010,7 +1112,7 @@ async def get_secretary_view():
 
 async def get_user_view():
     return await get_body_layout(
-        short_fltr(), id='search-section'
+        short_fltr()
     )
 
 async def get_admin_view():
@@ -1049,10 +1151,10 @@ VIEWS = {
 # @timed_cache(seconds=60)
 async def home(sess):
     role = sess.get('auth_r', const.ANONIM)
-    print(f'{role=}')
     body_section = VIEWS.get(role)
     return (fh.Title(f"Retha - {const.DESCR}"),
         *scripts,
+        fh.Div(id='sidebar'),
         fh.Main(
             await header_section(sess),
             await body_section(),

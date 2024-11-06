@@ -1,5 +1,5 @@
 
-from mysettings import AdType, Avcb, Choice, PropertyType, Role, Zone
+import mysettings as s
 
 DESCR = 'test description'
 
@@ -8,46 +8,59 @@ ZERO = 0
 ANONIM = 'anonim'
 
 SECRETARY_REGISTER = {
-    Role.BROKER: 'Corretor',
-    Role.OWNER: 'Proprietário',
-    Role.USER: 'Usuário',
+    s.Role.BROKER: 'Corretor',
+    s.Role.OWNER: 'Proprietário',
+    s.Role.USER: 'Usuário',
 }
 
 ADMIN_REGISTER = {
-    Role.ADMIN: 'Administrador',
-    Role.SECRETARY: 'Secretária',
+    s.Role.ADMIN: 'Administrador',
+    s.Role.SECRETARY: 'Secretária',
     **SECRETARY_REGISTER
 }
 
 AVCB_TYPE = {
-    Avcb.opt1: 'opt1',
-    Avcb.opt2: 'opt2'
+    s.Avcb.opt1: 'opt1',
+    s.Avcb.opt2: 'opt2'
 }
 
 CHOICE_TYPE = {
-    Choice.BOTH: 'Tanto faz',
-    Choice.YES: 'Sim',
-    Choice.NO: 'Não',
+    s.Choice.BOTH: 'Tanto faz',
+    s.Choice.YES: 'Sim',
+    s.Choice.NO: 'Não',
 }
 
 PPT_TYPE = {
-    PropertyType.WAREHOUSE: 'Galpão',
-    PropertyType.LAND: 'Terreno',
-    PropertyType.OFFICE: 'Escritório',
-    PropertyType.SHOP: 'Loja'
+    s.PropertyType.WAREHOUSE: 'Galpão',
+    s.PropertyType.LAND: 'Terreno',
+    s.PropertyType.OFFICE: 'Escritório',
+    s.PropertyType.SHOP: 'Loja'
 }
 
+PPT_TABLE = {
+    s.PropertyType.WAREHOUSE: 'warehouses',
+    s.PropertyType.LAND: 'lands',
+    s.PropertyType.OFFICE: 'offices',
+    s.PropertyType.SHOP: 'shops'
+}
+
+CMP_TABLE = {
+    s.PropertyType.WAREHOUSE: s.warehouse_comparisons,
+    s.PropertyType.LAND: s.land_comparisons,
+    s.PropertyType.OFFICE: s.office_comparisons,
+    s.PropertyType.SHOP: s.shop_comparisons,
+}
 AD_TYPE = {
-    AdType.SELL: 'Venda',
-    AdType.RENT: 'Locacão',
+    s.AdType.SELL: 'Venda',
+    s.AdType.RENT: 'Locacão',
 }
 
 ZONE = {
-    Zone.NORTH: 'NORTE',
-    Zone.EAST: 'LESTE',
-    Zone.WEST: 'OESTE',
-    Zone.SOUTH: 'SUL',
-    Zone.CENTER: 'CENTRO',
+    s.Zone.NORTH: 'NORTE',
+    s.Zone.EAST: 'LESTE',
+    s.Zone.WEST: 'OESTE',
+    s.Zone.SOUTH: 'SUL',
+    s.Zone.CENTER: 'CENTRO',
 }
 
 ADDRESS_FLDS = {
@@ -78,7 +91,7 @@ CMP_MODIFY = {
     'flr_capacity': lambda row: (f"{row['min_flr_capacity']}"
                                  if f"{row['min_flr_capacity']}" == f"{row['max_flr_capacity']}"
                                  else f"{row['min_flr_capacity']} a {row['max_flr_capacity']}"),
-    'details': lambda row: f"<a hx-get='/comparisons/{row['id']}' hx-target='#dialog' hx-swap='innerHTML'>Details</a>",
+    'details': lambda row: f"<a hx-get='/comparisons/{row['id']}/{row['ppt_type']}' hx-target='#dialog' hx-swap='innerHTML'>Details</a>",
     'available': lambda row: (f"{row['min_available']}"
                               if f"{row['min_available']}" == f"{row['max_available']}"
                               else f"{row['min_available']} a {row['max_available']}"),
@@ -139,7 +152,7 @@ MODIFICATIONS = {
     'flr_capacity': lambda row: (f"{row['min_flr_capacity']}"
                                  if f"{row['min_flr_capacity']}" == f"{row['max_flr_capacity']}"
                                  else f"{row['min_flr_capacity']} a {row['max_flr_capacity']}"),
-    'details': lambda row: f"<a hx-get='/comparisons/{row['id']}' hx-target='#dialog' hx-swap='innerHTML'>{RENAME['details']}</a>",
+    'details': lambda row: f"<a hx-get='/comparisons/{row['id']}/{row['ppt_type']}' hx-target='#dialog' hx-swap='innerHTML'>{RENAME['details']}</a>",
     'available': lambda row: (f"{row['min_available']}"
                               if f"{row['min_available']}" == f"{row['max_available']}"
                               else f"{row['min_available']} a {row['max_available']}"),
@@ -203,8 +216,8 @@ FLDS_RENAME = {
 }
 
 FILTER_FLDS = {
-    "commercial": AD_TYPE,
-    "type": PPT_TYPE
+    "ad_type": AD_TYPE,
+    "ppt_type": PPT_TYPE
 }
 
 BROKERS = {

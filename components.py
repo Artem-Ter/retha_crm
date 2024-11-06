@@ -19,7 +19,7 @@ def get_dialog(hdr_msg: str, item) -> fh.DialogX:
     return fh.DialogX(item, open=True, header=hdr, id='dialog', hx_swap='outerHTML')
 
 def slct_fld(nm: str, cs: dict, multiple: bool = False, **kwargs) -> fh.Select:
-    return fh.Select(*[fh.Option(v, value=k) for k, v in cs.items()], name=nm, multiple=multiple, **kwargs)
+    return fh.Select(*[fh.Option(v, value=str(k)) for k, v in cs.items()], name=nm, multiple=multiple, **kwargs)
 
 def range_script(prefix: str):
     return f"""
@@ -236,7 +236,7 @@ def get_autocomplete_for(table: str, label: str, multiple: bool=False, tp: str='
     """
     if table == 'users':
         qry = """
-        SELECT name || ' - ' || email AS option, id
+        SELECT name || ' - ' || email || ' - ' || id AS option, id
         FROM users
         """
     qry_l = db.query(qry)
@@ -262,20 +262,17 @@ def fltr_flds():
         ),
         fh.Input(type='search', id="name", placeholder="Codigo do imovel"),
         *[slct_fld(k, v) for k, v in FILTER_FLDS.items()],
-        (fh.Label('Em condomínio', _for='in_conodminium'),
-        slct_fld("in_conodminium", CHOICE_TYPE)),
+        fh.Label('Em condomínio', slct_fld("in_conodminium", CHOICE_TYPE)),
         get_autocomplete_for('cities', 'Cidade'),
         get_autocomplete_for('regions', 'Região'),
         get_autocomplete_for('districts', 'Bairro'),
-        slct_fld('Zona', ZONE),
+        # slct_fld('Zona', ZONE),
         *rngs,
         slct_fld('avcb', AVCB_TYPE),
-        (fh.Label('Em construção', _for='under_construction'),
-        slct_fld("under_construction", CHOICE_TYPE),
-        ),
+        fh.Label('Em construção', slct_fld("under_construction", CHOICE_TYPE)),
     )
 
-def mk_fltr():
+def mk_fltr(btn=None):
     return fh.Form(
         fh.Div(
             fh.Button('x', rel='prev', hx_post='/cls_fltr'),
@@ -284,6 +281,7 @@ def mk_fltr():
         fltr_flds(),
         (fh.Div(
             fh.Button('Limpar', type='button', hx_get='/clr_fltr'),
+            btn,
             fh.Button('Buscar', type='button', hx_post="/search_ppts", hx_target="#result"),
             cls='frm-footer'),)
     )
@@ -341,7 +339,7 @@ def short_fltr():
         fh.Hidden(name='avcb'),
         fh.Hidden(name='under_construction'),
         fh.Button('Buscar', type='button', hx_post="/search_ppts", hx_target="#result"),
-        fh.Button('Mais filtros', type='button', hx_post='/filters', hx_target='#search-section')
+        fh.Button('Mais filtros', type='button', hx_post='/filters', hx_target='#body')
     )
 
 def map_locations_script(d: list, ad_type: int):
@@ -404,9 +402,9 @@ async function initMap() {{
                     <button class="carousel-control left" onclick="prevSlide('${{poi.id}}')">&#10094;</button>
                     <button class="carousel-control right" onclick="nextSlide('${{poi.id}}')">&#10095;</button>
                 </div>
-                <a href='{ad_type}/properties/${{poi.id}}' style="text-decoration: none; color: inherit;" target="blank">
+                <a href='{ad_type}/properties/${{poi.id}}/${{poi.ppt_type}}' style="text-decoration: none; color: inherit;" target="blank">
                     <div class="content">
-                        <h5>${{poi.type}}: ${{poi.name}}</h5>
+                        <h5>${{poi.ppt_type}}: ${{poi.name}}</h5>
                         <h6>Preço a partir de: ${{poi.price}} R$/m2</h6>
                         <p>Area disponivel: ${{poi.min_area}} - ${{poi.max_area}} m2</p>
                         <p>${{poi.street}}, ${{poi.city}}</p>

@@ -12,8 +12,9 @@ Application is created in order to help both users and company employees to sele
 
 - see table with all the important data about selected options side by side
 - automaticaly create pdf with selected comparisons to send to clients' in case of employees or to use for furhter decision making by users themselves.
-  Each user request is registred as task for broker and can be easily tracked within the system. Which helps management to controle the workflow and potential roadblocks.
-  For employees it provides clear workspace where they can treck all their pending tasks and decide on prioreties. Following the task workflow employee doesn't need to worry that chosen comparison will be added to user's comparisons list. Employee may aslo see which comparisons were already chosen and get a better idea of what kind of properties are considerd more attractive by client.
+
+Each user request is registred as task for broker and can be easily tracked within the system. Which helps management to controle the workflow and potential roadblocks.
+For employees it provides clear workspace where they can treck all their pending tasks and decide on prioreties. Following the task workflow employee doesn't need to worry that chosen comparison will be added to user's comparisons list. Employee may aslo see which comparisons were already chosen and get a better idea of what kind of properties are considerd more attractive by client.
 
 **Features**
 

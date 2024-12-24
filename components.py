@@ -424,6 +424,7 @@ def get_autocomplete_for(
     """
     Provide autocomplete field with options from db.table. For tables with name fld.
     """
+    print(field)
     fld = fh.Input(
         id=field,
         type=tp,

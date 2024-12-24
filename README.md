@@ -1,81 +1,100 @@
 # RETHA CRM
 
-#### Video Demo: [Youtube]()
+#### Video Demo: [Youtube](https://youtu.be/guCN_1nxFtk)
 
 #### Description:
 
 CRM for real estate company
 
-Features:
+# CRM for Real Estate Company
 
-- CRUD operations for users and real estates
-- UI determent by user's role
-- interactive map
-- create and download presentation in pdf
+## Features
 
-Structure:
+- CRUD operations for users and real estate properties.
+- UI determined by the user's role.
+- Interactive map.
+- Create and download presentations in PDF format.
 
-- main.py - determine buisness logic and define urls
-- components.py - service and components functions
-- mysettings.py - Database settings and inicialization
-- const.py - constant's definition
+## Structure
 
-Stack:
+- `main.py` - Determines business logic and defines URLs.
+- `components.py` - Service and component functions.
+- `mysettings.py` - Database settings and initialization.
+- `const.py` - Constant definitions.
 
-- Languages: Python, JS, CSS
-- Frameworks: FastHTML
-- Libraries: reportlab, asyncio, pandas, etc.
+## Stack
 
-#### About application:
+- **Languages**: Python, JavaScript, CSS.
+- **Frameworks**: FastHTML.
+- **Libraries**: ReportLab, asyncio, pandas, etc.
 
-Application works with following entites:
+---
 
-- User - has access to interactive map and property detials
-- Client - User's functionality + may add and manage his/her comparisons, create and dowload presentation in pdf based on selected comparisons
-- Broker / Secretary - Client's functionality + craate tasks, edit properties and users infromation
-- Administrator - Secretary's functionality + may create brokers and secretaries
+## About the Application
 
-Use Case:
+The application works with the following entities:
 
-- for clients: Search for properties on main page -> check property details -> add units/modules for comparison -> check and edit comparisons -> download presentation with selected comparisons
-- for employees: Create task from client to broker -> search properties based on task parameters -> check and edit property details -> add units/modules to comparisons for client defined by task -> check and edit added comparisons -> download presentation with selected comparisons
+- **User**: Has access to the interactive map and property details.
+- **Client**:
+  - Has User functionality.
+  - Can add and manage comparisons.
+  - Can create and download presentations in PDF format based on selected comparisons.
+- **Broker / Secretary**:
+  - Has Client functionality.
+  - Can create tasks.
+  - Can edit property and user information.
+- **Administrator**:
+  - Has Secretary functionality.
+  - Can create brokers and secretaries.
+
+---
+
+## Use Case
+
+- **For clients**:  
+  Search for properties on the main page → Check property details → Add units/modules for comparison → Check and edit comparisons → Download presentations with selected comparisons.
+
+- **For employees**:  
+  Create a task from client to broker → Search properties based on task parameters → Check and edit property details → Add units/modules to comparisons for a client as defined by the task → Check and edit added comparisons → Download presentations with selected comparisons.
+
+---
 
 ## Installation
 
-Clone the repository.
+1. Clone the repository:
 
-```bash
-git clone git@github.com:Artem-Ter/retha_crm.git
-```
+   ```bash
+   git clone git@github.com:Artem-Ter/retha_crm.git
+   ```
 
-Create and activate vitual enviroment
+2. Create and activate virtual environment:
 
-```bash
-python -m venv env
-source venv/bin/activate
-python -m pip install --upgrade pip
-```
+   ```bash
+   python -m venv env
+   source venv/bin/activate
+   python -m pip install --upgrade pip
+   ```
 
-Install dependencies
+3. Install dependencies:
 
-```bash
-cd retha_crm
-pip install -r requirements.txt
-```
+   ```bash
+   cd retha_crm
+   pip install -r requirements.txt
+   ```
 
-Create .env file with following data
+4. Create .env file with following data:
 
-```
-GOOGLE_API=your_google_api_key
-ADMIN_PWD=your_password
-ADMIN_EMAIL=admin_email
-```
+   ```
+   GOOGLE_API=your_google_api_key
+   ADMIN_PWD=your_password
+   ADMIN_EMAIL=admin_email
+   ```
 
-Run application
+5. Run application:
 
-```bash
-python main.py
-```
+   ```bash
+   python3 main.py
+   ```
 
 ## License
 

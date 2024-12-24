@@ -117,7 +117,7 @@ async def get_register(sess):
             fh.Hidden(name="pwd", value="superpassword"),
             c.slct_fld("role", const.ROLE_TYPE),
         )
-    elif role == s.Role.SECRETARY:
+    elif role in (s.Role.SECRETARY, s.Role.BROKER):
         add_field = (
             fh.Hidden(name="pwd", value="superpassword"),
             c.slct_fld("role", const.SECRETARY_REGISTER),
@@ -407,6 +407,7 @@ async def create_adrs(sess, req, d: dict):
         fh.add_toast(sess, text, "success")
         return None
     adrs = s.addresses.insert(adrs_d)
+    print(adrs)
     text += "adicionado"
     frm = await c.get_ppt_frm(adrs["id"], int(d["ppt_type"]))
     fh.add_toast(sess, text, "success")
@@ -837,6 +838,7 @@ async def get_unit_edit_frm(sess, ppt_id: int, unit_id: int):
 
 @app.route("/ppts/{ppt_id}/units", methods=["PUT", "POST"])
 async def edit_unit(sess, req, ppt_id: int, unit: dict):
+    print(f"{unit=}")
     owner = unit["owner_id"].split(" - ")
     if len(owner) != 3:
         return None

@@ -6,21 +6,30 @@
 
 CRM for Real Estate Company
 
-## Features
+**Purpose**
+
+Application is created in order to help both users and company employees to select and evaluate properties. It provides possiblity to add different combinations of units, from the same property or from different properties, to comparison. So users may:
+
+- see table with all the important data about selected options side by side
+- automaticaly create pdf with selected comparisons to send to clients' in case of employees or to use for furhter decision making by users themselves.
+  Each user request is registred as task for broker and can be easily tracked within the system. Which helps management to controle the workflow and potential roadblocks.
+  For employees it provides clear workspace where they can treck all their pending tasks and decide on prioreties. Following the task workflow employee doesn't need to worry that chosen comparison will be added to user's comparisons list. Employee may aslo see which comparisons were already chosen and get a better idea of what kind of properties are considerd more attractive by client.
+
+**Features**
 
 - CRUD operations for users and real estate properties.
 - UI determined by the user's role.
 - Interactive map.
 - Create and download presentations in PDF format.
 
-## Structure
+**Structure**
 
 - `main.py` - Determines business logic and defines URLs.
 - `components.py` - Service and component functions.
 - `mysettings.py` - Database settings and initialization.
 - `const.py` - Constant definitions.
 
-## Stack
+**Stack**
 
 - **Languages**: Python, JavaScript, CSS.
 - **Frameworks**: FastHTML.
@@ -28,7 +37,7 @@ CRM for Real Estate Company
 
 ---
 
-## About the Application
+**About the Application**
 
 The application works with the following entities:
 
@@ -47,7 +56,7 @@ The application works with the following entities:
 
 ---
 
-## Use Case
+**Use Case**
 
 - **For clients**:  
   Search for properties on the main page → Check property details → Add units/modules for comparison → Check and edit comparisons → Download presentations with selected comparisons.
@@ -57,7 +66,7 @@ The application works with the following entities:
 
 ---
 
-## Installation
+**Installation**
 
 1. Clone the repository:
 

@@ -4,9 +4,7 @@
 
 #### Description:
 
-CRM for real estate company
-
-# CRM for Real Estate Company
+CRM for Real Estate Company
 
 ## Features
 

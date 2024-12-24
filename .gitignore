@@ -162,7 +162,7 @@ cython_debug/
 #.idea/
 
 pdfs/
-images/
+imgs/
 data/
 *.ico
 map.jpg

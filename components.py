@@ -1,29 +1,191 @@
+import asyncio
 import json
+from collections import ChainMap
+from datetime import datetime as dt
 
+import aiofiles.os
+import const
 import fasthtml.common as fh
-from const import (ADDRESS_FLDS, AVCB_TYPE, CHOICE_TYPE, FILTER_FLDS, RANGES,
-                   ZONE)
-from mysettings import db
+import mysettings as s
+import pandas as pd
+from reportlab.lib import colors
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen import canvas
+from reportlab.platypus import Paragraph, Table, TableStyle
+
+_blank = dict(target="_blank", rel="noopener noreferrer")
+_flex = "display: flex; flex-wrap: wrap; align-content: flex-start; gap: 1em;"
+_grid = "display: grid; gap: 1.5rem; grid-template-columns: 1fr 1fr 1fr"
 
 
-async def get_address_flds():
-    return (
-        get_autocomplete_for('cities', 'Cidade'),
-        get_autocomplete_for('regions', 'Região'),
-        get_autocomplete_for('districts', 'Bairro'),
+async def save_item(path: str, ppt_id: int, item):
+    if path == "infrs":
+        infr = {"name": item, "id": get_or_create("infr_id", item)}
+        s.ppt_infrastructures.insert(ppt_id=ppt_id, infr_id=infr["id"])
+        return infr
+    # logic for pdf and images
+    item_filename = f"{ppt_id}_{item.filename}"
+    tbl = s.FILE_TABLES[path]
+    if path == "pdfs":
+        item_path = s.PDF_DIR / item_filename
+    else:
+        item_path = s.IMG_DIR / item_filename
+    # Save file to the server
+    with item_path.open("wb") as f:
+        f.write(await item.read())
+    _path = f"/{path}/{item_filename}"
+    i = tbl.insert({"ppt_id": ppt_id, "name": _path})
+    return i
+
+
+def get_or_create(field: str, name: str | None = None) -> int:
+    """Get or create item in db. Return item id"""
+    tbl = s.FK_TABLES.get(field)
+    srch = ["", name][bool(name)]
+    itm = tbl.rows_where(
+        "LOWER(name) = ?",
+        (srch.lower(),),
+        select="id",
+        limit="1",
+    )
+    itm = list(itm)
+    if itm:
+        return itm[0]["id"]
+
+    itm = tbl.insert(name=name)
+    return itm["id"]
+
+
+async def delete_pdf(fpath: str):
+    await aiofiles.os.remove(fpath)
+
+
+def get_tbl_flds_for(ppt_type: int, ad_type: int | None, *args) -> list:
+    flds = [*args, "title", "available", "area"]
+    price_flds = [
+        "sell",
+        "rent",
+    ]
+    if ad_type:
+        price_flds = [["sell"], ["price", "rent"]][ad_type == s.AdType.RENT]
+    if ppt_type == s.PropertyType.WAREHOUSE:
+        flds += ["efficiency"] + price_flds + [*s.PPT_COSTS_FLDS]
+        flds += [
+            *s.WH_BOOL_FLDS,
+            *s.WH_RANGE_FLDS,
+            "between_pilars",
+        ]
+        return flds
+    flds += price_flds + [*s.PPT_COSTS_FLDS]
+    return flds
+
+
+async def get_renamed_flds_for(
+    ppt_type: int | None = None, price_per_month: bool = False
+) -> dict:
+    d = const.RENAME_FLDS.copy()
+    if ppt_type == s.PropertyType.WAREHOUSE:
+        d["area"] = "ABL, m2"
+    add = "R$/mes" if price_per_month else "R$/m2"
+    for k in ("price", *s.PPT_COSTS_FLDS, *s.RENT_SELL_FLDS):
+        d[k] = f"{d[k]}, {add}"
+    return d
+
+
+def delete_file(path: str, id: int):
+    t = s.FILE_TABLES[path]
+    item = t[id]
+    link = s.BASE_DIR / item["name"][1:]
+    link.unlink()
+    t.delete(id)
+
+
+async def save_task_params(d: dict) -> None:
+    for k, tbl in s.TSK_MULT_FK.items():
+        if d.get(k):
+            items = d[k] if isinstance(d.get(k), list) else [d[k]]
+            for itm in items:
+                if itm:
+                    tbl.insert({"task_id": d["task_id"], k: get_or_create(k, itm)})
+    ppt_type = int(d["ppt_type"])
+    tbl = s.PPT_TSK_TABLES[ppt_type]
+    for m in ("min", "max"):
+        d[f"price_{m}"] = (
+            d.get(f"rent_{m}") if d.get(f"rent_{m}") else d.get(f"sell_{m}")
+        )
+    params = ChainMap(s.PPT_TSK_PARAMS[ppt_type], {"task_id": int})
+    tbl.insert({k: v(d[k]) for k, v in params.items() if d.get(k)})
+
+
+def get_loginout_fld(out: bool = False, **kwargs):
+    s = ["login", "logout"][out]
+    t = ["#register", "#login-section"][out]
+    return fh.Div(
+        fh.Strong(fh.AX(s.capitalize(), hx_get=f"/{s}", hx_target=t)),
+        id="login-section",
+        **kwargs,
     )
 
-def get_dialog(hdr_msg: str, item) -> fh.DialogX:
-    hdr = fh.Div(fh.Button(aria_label='Close', rel='prev', hx_get='/cls_dialog', hx_swap='outerHTML'),  # Close button
-                 fh.P(hdr_msg))
-    return fh.DialogX(item, open=True, header=hdr, id='dialog', hx_swap='outerHTML')
+
+def get_hdr_flds(sess, role, **kwargs) -> tuple:
+    usr_id = sess.get("auth", const.ANONIM)
+    if role in const.EMPLOYEES:
+        rfld = fh.Strong(fh.AX("Tasks", hx_get="/tasks", hx_target="#result"))
+        lfld = fh.Strong(fh.A("Dashboard", href="/dashboard", **_blank))
+    else:
+        rfld = fh.Strong(fh.A("Comparisons", href="/comparisons", **_blank))
+        lfld = fh.Strong(fh.A("Retha", href="/"))
+    return (
+        fh.Div(lfld, id="hdr-left-fld", **kwargs),
+        fh.Div(rfld, id="hdr-right-fld", **kwargs),
+    )
+
+
+def get_dialog(
+    hdr_msg: str,
+    item,
+    div_id: str = "dialog",
+    z_index: int = 500,
+    cls_btn: str = "cls_details",
+) -> fh.DialogX:
+    hdr = fh.Div(
+        fh.Button(
+            aria_label="Close",
+            rel="prev",
+            hx_get=f"/{cls_btn}/{div_id}",
+            hx_include=f"#{div_id}",
+            hx_swap="outerHTML",
+        ),  # Close button
+        fh.P(hdr_msg),
+    )
+    return fh.DialogX(
+        item,
+        open=True,
+        header=hdr,
+        id=div_id,
+        hx_swap="outerHTML",
+        style=f"z-index: {z_index}",
+    )
+
 
 def slct_fld(nm: str, cs: dict, multiple: bool = False, **kwargs) -> fh.Select:
-    return fh.Select(*[fh.Option(v, value=str(k)) for k, v in cs.items()], name=nm, multiple=multiple, **kwargs)
+    return fh.Label(
+        const.RENAME_FLDS[nm],
+        fh.Select(
+            *[fh.Option(v, value=str(k)) for k, v in cs.items()],
+            name=nm,
+            multiple=multiple,
+            **kwargs,
+        ),
+    )
+
 
 def range_script(prefix: str):
     return f"""
 function updateSliderValues(prefix) {{
+    console.log("updateSliderValues is triggered for: " + prefix)
     var minHandler = document.getElementById(prefix + "_min_handler");
     var maxHandler = document.getElementById(prefix + "_max_handler");
     var minInput = document.getElementById(prefix + "_min");
@@ -98,33 +260,58 @@ window.addEventListener('load', function() {{
 }});
 
 document.body.addEventListener('htmx:afterSettle', function() {{
+    console.log("HTMX swap completed for prefix:", '{prefix}');
     updateSliderValues('{prefix}');  // Reinitialize slider after HTMX swap
 }});
 """
 
-def range_container(label: str, minimum: int, maximum: int, step: int, prefix: str):
+
+def range_container(field: str, minimum: int, maximum: int, step: int, rename: str):
+    d = {"min": minimum, "max": maximum}
     return fh.Div(
-        fh.Label(label, _for='range'),
-        fh.Div(
-            fh.Grid(
-                fh.Div(fh.Label('Min', _for=f'{prefix}_min'),
-                    fh.Input(id=f'{prefix}_min', type='number', value=str(minimum), min=str(minimum), max=str(maximum), step=str(step))),
-                fh.Div(fh.Label('Max', _for=f'{prefix}_max'),
-                    fh.Input(id=f'{prefix}_max', type='number', value=str(maximum), min=str(minimum), max=str(maximum), step=str(step))),
+        fh.Label(
+            rename,
+            fh.Div(
+                fh.Grid(
+                    *(
+                        fh.Label(
+                            k.capitalize(),
+                            fh.Input(
+                                id=f"{field}_{k}",
+                                type="number",
+                                value=str(v),
+                                min=str(minimum),
+                                max=str(maximum),
+                                step=str(step),
+                            ),
+                        )
+                        for k, v in d.items()
+                    )
+                )
             ),
             fh.Div(
-                fh.Span(id=f'{prefix}_selected', cls='range-selected'),
-                cls='range-slider',
+                fh.Span(id=f"{field}_selected", cls="range-selected"),
+                cls="range-slider",
             ),
             fh.Div(
-                fh.Input(id=f'{prefix}_min_handler', type='range', value=str(minimum), min=str(minimum), max=str(maximum), step=str(step)),
-                fh.Input(id=f'{prefix}_max_handler', type='range', value=str(maximum), min=str(minimum), max=str(maximum), step=str(step)),
-                cls='range-input',
+                *(
+                    fh.Input(
+                        id=f"{field}_{k}_handler",
+                        type="range",
+                        value=str(v),
+                        min=str(minimum),
+                        max=str(maximum),
+                        step=str(step),
+                    )
+                    for k, v in d.items()
+                ),
+                cls="range-input",
             ),
-            cls='range',
+            cls="range",
         ),
-        fh.Script(range_script(prefix)),
+        fh.Script(range_script(field)),
     )
+
 
 def autocomplete_script(prefix: str, multiple: bool):
     return f"""
@@ -226,123 +413,118 @@ def autocomplete_script(prefix: str, multiple: bool):
     }}
     """
 
-def get_autocomplete_for(table: str, label: str, multiple: bool=False, tp: str='text'):
+
+def get_autocomplete_for(
+    field: str,
+    multiple: bool = False,
+    tp: str = "text",
+    labled: bool = True,
+    prefil: list | None = None,
+):
     """
-    Provide autocomplete field with options from db.table
+    Provide autocomplete field with options from db.table. For tables with name fld.
     """
-    qry = f"""
-    SELECT name AS option, id
-    FROM {table}
-    """
-    if table == 'users':
-        qry = """
-        SELECT name || ' - ' || email || ' - ' || id AS option, id
-        FROM users
-        """
-    qry_l = db.query(qry)
+    fld = fh.Input(
+        id=field,
+        type=tp,
+        placeholder=const.RENAME_FLDS[field],
+        autocomplete="off",  # Disable default browser autocomplete
+    )
+    if labled:
+        fld = fh.Label(
+            const.RENAME_FLDS[field],
+            fld,
+        )
     return fh.Div(
-        fh.Input(
-            id=f"{table}", type=tp, placeholder=label,
-            autocomplete="off",  # Disable default browser autocomplete
-        ),
+        fld,
         fh.Ul(
-            *[fh.Li(option['option'], value=option['id'], cls="dropdown-item") for option in qry_l],  # Render the options dynamically with class
-            id=f"{table}_dropdown", cls="dropdown-list", style="display:none;"  # Hide dropdown initially
+            *[
+                fh.Li(option["name"], value=option["id"], cls="dropdown-item")
+                for option in get_tbl_options(field)
+            ],  # Render the options dynamically with class
+            id=f"{field}_dropdown",
+            cls="dropdown-list",
+            style="display:none;",  # Hide dropdown initially
         ),
-        fh.Div(id=f"{table}_selected", cls="selected-container"),  # Container for selected options
-        fh.Div(id=f"{table}_hidden"),  # Container for hidden inputs (submitted with form)
-        fh.Script(autocomplete_script(table, multiple))  # Add the dynamic filtering and selection script
-    )
-
-def fltr_flds():
-    rngs = [range_container(**v, prefix=k) for k, v in RANGES.items()]
-    return (
-        get_autocomplete_for(
-            'infrastructures', 'Infraestrutura', multiple=True
-        ),
-        fh.Input(type='search', id="name", placeholder="Codigo do imovel"),
-        *[slct_fld(k, v) for k, v in FILTER_FLDS.items()],
-        fh.Label('Em condomínio', slct_fld("in_conodminium", CHOICE_TYPE)),
-        get_autocomplete_for('cities', 'Cidade'),
-        get_autocomplete_for('regions', 'Região'),
-        get_autocomplete_for('districts', 'Bairro'),
-        # slct_fld('Zona', ZONE),
-        *rngs,
-        slct_fld('avcb', AVCB_TYPE),
-        fh.Label('Em construção', slct_fld("under_construction", CHOICE_TYPE)),
-    )
-
-def mk_fltr(btn=None):
-    return fh.Form(
         fh.Div(
-            fh.Button('x', rel='prev', hx_post='/cls_fltr'),
-            cls='frm-header'
-        ),
-        fltr_flds(),
-        (fh.Div(
-            fh.Button('Limpar', type='button', hx_get='/clr_fltr'),
-            btn,
-            fh.Button('Buscar', type='button', hx_post="/search_ppts", hx_target="#result"),
-            cls='frm-footer'),)
+            *[mult_choice(s, field) for s in prefil if s] if prefil else [],
+            id=f"{field}_selected",
+            style="display: flex; justify-content: flex-start;",
+        ),  # Container for selected options
+        fh.Div(
+            id=f"{field}_hidden"
+        ),  # Container for hidden inputs (submitted with form)
+        fh.Script(
+            autocomplete_script(field, multiple)
+        ),  # Add the dynamic filtering and selection script
     )
 
-def short_fltr():
-    return fh.Form(
-        fh.Grid(
-            fh.Input(type='search', name="name", placeholder="Codigo do imovel"),
-            *[slct_fld(k, v) for k, v in FILTER_FLDS.items()],
-            (fh.Label('Em condomínio', _for='in_conodminium'),
-            slct_fld("in_conodminium", CHOICE_TYPE)),
-            get_autocomplete_for('cities', 'Cidade'),
-            range_container(**RANGES['price'], prefix='price'),
+
+async def short_fltr(
+    ad_type: int = s.AdType.RENT,
+    ppt_type: int = s.PropertyType.WAREHOUSE,
+    prefil: list | None = None,
+):
+    ad_fld = const.AD_TYPE_FLDS[ad_type]
+    btns = fh.Grid(
+        fh.Button(
+            "Buscar", hx_get="/ppts", hx_target="#result", hx_include="#short-fltr"
         ),
-        fh.Hidden(name='in_conodminium'),
-        fh.Hidden(name='region'),
-        fh.Hidden(name='district'),
-        fh.Hidden(name='zone'),
-        fh.Hidden(name='area_min', value=str(RANGES['area']['minimum'])),
-        fh.Hidden(name='area_max', value=str(RANGES['area']['maximum'])),
-        fh.Hidden(name='area_min_handler', value=str(RANGES['area']['minimum'])),
-        fh.Hidden(name='area_max_handler', value=str(RANGES['area']['maximum'])),
-        fh.Hidden(name='height_min', value=str(RANGES['height']['minimum'])),
-        fh.Hidden(name='height_max', value=str(RANGES['height']['maximum'])),
-        fh.Hidden(name='height_min_handler', value=str(RANGES['height']['minimum'])),
-        fh.Hidden(name='height_max_handler', value=str(RANGES['height']['maximum'])),
-        fh.Hidden(name='efficiency_min', value=str(RANGES['efficiency']['minimum'])),
-        fh.Hidden(name='efficiency_max', value=str(RANGES['efficiency']['maximum'])),
-        fh.Hidden(name='efficiency_min_handler', value=str(RANGES['efficiency']['minimum'])),
-        fh.Hidden(name='efficiency_max_handler', value=str(RANGES['efficiency']['maximum'])),
-        fh.Hidden(name='abl_min', value=str(RANGES['abl']['minimum'])),
-        fh.Hidden(name='abl_max', value=str(RANGES['abl']['maximum'])),
-        fh.Hidden(name='abl_min_handler', value=str(RANGES['abl']['minimum'])),
-        fh.Hidden(name='abl_max_handler', value=str(RANGES['abl']['maximum'])),
-        fh.Hidden(name='doks_min', value=str(RANGES['doks']['minimum'])),
-        fh.Hidden(name='doks_max', value=str(RANGES['doks']['maximum'])),
-        fh.Hidden(name='doks_min_handler', value=str(RANGES['doks']['minimum'])),
-        fh.Hidden(name='doks_max_handler', value=str(RANGES['doks']['maximum'])),
-        fh.Hidden(name='flr_capacity_min', value=str(RANGES['flr_capacity']['minimum'])),
-        fh.Hidden(name='flr_capacity_max', value=str(RANGES['flr_capacity']['maximum'])),
-        fh.Hidden(name='flr_capacity_min_handler', value=str(RANGES['flr_capacity']['minimum'])),
-        fh.Hidden(name='flr_capacity_max_handler', value=str(RANGES['flr_capacity']['maximum'])),
-        fh.Hidden(name='office_area_min', value=str(RANGES['office_area']['minimum'])),
-        fh.Hidden(name='office_area_max', value=str(RANGES['office_area']['maximum'])),
-        fh.Hidden(name='office_area_min_handler', value=str(RANGES['office_area']['minimum'])),
-        fh.Hidden(name='office_area_max_handler', value=str(RANGES['office_area']['maximum'])),
-        fh.Hidden(name='energy_min', value=str(RANGES['energy']['minimum'])),
-        fh.Hidden(name='energy_max', value=str(RANGES['energy']['maximum'])),
-        fh.Hidden(name='energy_min_handler', value=str(RANGES['energy']['minimum'])),
-        fh.Hidden(name='energy_max_handler', value=str(RANGES['energy']['maximum'])),
-        # fh.Hidden(name='last_update_min', value=str(RANGES['last_update']['minimum'])),
-        # fh.Hidden(name='last_update_max', value=str(RANGES['last_update']['maximum'])),
-        # fh.Hidden(name='last_update_min_handler', value=str(RANGES['last_update']['minimum'])),
-        # fh.Hidden(name='last_update_max_handler', value=str(RANGES['last_update']['maximum'])),
-        fh.Hidden(name='avcb'),
-        fh.Hidden(name='under_construction'),
-        fh.Button('Buscar', type='button', hx_post="/search_ppts", hx_target="#result"),
-        fh.Button('Mais filtros', type='button', hx_post='/filters', hx_target='#body')
+        fh.Button(
+            "Mais filtros",
+            hx_get="/filters",
+            hx_target="#dialog",
+            hx_include="#short-fltr",
+        ),
+    )
+    ppt_flds = (
+        (
+            (
+                fh.Hidden(
+                    name=f"{k}_{m}", value=str(const.RANGES[k][const.MIN_MAX[m]])
+                ),
+                fh.Hidden(
+                    name=f"{k}_{m}_handler",
+                    value=str(const.RANGES[k][const.MIN_MAX[m]]),
+                ),
+            )
+            for k in s.WH_RANGE_FLDS
+            for m in ("min", "max")
+        )
+        if ppt_type == s.PropertyType.WAREHOUSE
+        else tuple()
     )
 
-def map_locations_script(d: list, ad_type: int):
+    rnm = await get_renamed_flds_for(ppt_type)
+    return fh.Div(
+        fh.Form(
+            fh.Grid(
+                get_ad_ppt_type_flds(),
+                get_autocomplete_for("city_id", prefil=prefil),
+                fh.Div(
+                    range_container(ad_fld, **const.RANGES[ad_fld], rename=rnm[ad_fld]),
+                    id="price_type",
+                ),
+                fh.Div(
+                    (
+                        range_container(k, **const.RANGES[k], rename=rnm[k])
+                        for k in s.UNIT_RANGE_FLDS
+                    ),
+                ),
+            ),
+            *(fh.Hidden(name=k) for k in s.PPT_CHOICE_FLDS),
+            *ppt_flds,
+            fh.Hidden(name="region_id"),
+            fh.Hidden(name="district_id"),
+            fh.Hidden(name="avcb_id"),
+            fh.Hidden(name="infr_id"),
+        ),
+        btns,
+        id="short-fltr",
+    )
+
+
+def map_locations_script(d: list, query: str):
     return f"""
 async function initMap() {{
     const map = new google.maps.Map(document.getElementById("map"), {{
@@ -362,23 +544,6 @@ async function initMap() {{
             map: map,
             title: poi.name
         }});
-
-        marker.addListener("click", () => {{
-            infoWindow.setContent(`
-                <div class="carousel" id="carousel-${{poi.id}}">
-                    ${{poi.images.map((img, index) => `
-                        <div class="carousel-item ${{index === 0 ? 'active' : ''}}">
-                            <img src="${{img}}" alt="Image ${{index + 1}}">
-                        </div>
-                    `).join('')}}
-                    <button class="carousel-control left" onclick="prevSlide('${{poi.id}}')">&#10094;</button>
-                    <button class="carousel-control right" onclick="nextSlide('${{poi.id}}')">&#10095;</button>
-                </div>
-                <h5>${{poi.name}}</h5>
-                <p>${{poi.city}}, ${{poi.street}}</p>
-            `);
-            infoWindow.open(map, marker);
-        }}, {{ passive: true }});
 
         return marker;
     }});
@@ -402,7 +567,7 @@ async function initMap() {{
                     <button class="carousel-control left" onclick="prevSlide('${{poi.id}}')">&#10094;</button>
                     <button class="carousel-control right" onclick="nextSlide('${{poi.id}}')">&#10095;</button>
                 </div>
-                <a href='{ad_type}/properties/${{poi.id}}/${{poi.ppt_type}}' style="text-decoration: none; color: inherit;" target="blank">
+                <a href='/ppts/${{poi.id}}{query}' style="text-decoration: none; color: inherit;" target="blank">
                     <div class="content">
                         <h5>${{poi.ppt_type}}: ${{poi.name}}</h5>
                         <h6>Preço a partir de: ${{poi.price}} R$/m2</h6>
@@ -450,6 +615,7 @@ function prevSlide(id) {{
 }}
 """
 
+
 def map_comparisons_script(d: list):
     return f"""
 async function initMap() {{
@@ -481,52 +647,1258 @@ window.addEventListener("load", function () {{
 }});
 """
 
-def module_form(ppt_id:int):
-    hdr = fh.Div(fh.Button(aria_label='Close', rel='prev', hx_get='/cls_dialog', hx_swap='outerHTML'),
-                 fh.P("Cadastro do Modulo"))
-    return fh.DialogX(fh.Form(
-        fh.Hidden(name='pd_id', value=ppt_id),
-        # *(slct_fld(k, v) for k, v in BROKERS.items()),
-        fh.Input(name='owner_id', placeholder='Proprietario'),
-        fh.Fieldset(
-            fh.Label('Modulo:', fh.Input(name='title', placeholder='Nome')),
-            fh.Label('Pe direito, m', fh.Input(name='height', placeholder='Pe direito, m')),
-            fh.Label('Piso, ton/m2', fh.Input(name='flr_capacity', placeholder='Piso, ton/m2')),
-            fh.Label('Entre pilares, m', fh.Input(name='width', placeholder='Entre pilares, m')),
-            fh.Label('ABL, m2', fh.Input(name='abl', placeholder='ABL, m2')),
-            fh.Label('Escritorio/Mezanino, m2', fh.Input(name='office_area', placeholder='Escritorio/Mezanino, m2')),
-            fh.Label('Docas, qda', fh.Input(name='docks', placeholder='Docas, qda')),
-            fh.Label('Aluguel, R$/m2', fh.Input(name='rent', placeholder='Aluguel, R$/m2')),
-            fh.Label('Venta, R$/m2', fh.Input(name='sell', placeholder='Venta, R$/m2')),
-            fh.Label('Enargia, Kva', fh.Input(name='energy', placeholder='Enargia, Kva')),
-            fh.Label('Data de disponibilidade', fh.Input(name='available', placeholder='Data de disponibilidade'))),
-        fh.Button("Salva e Sai", type="submit", name="action", value="save_exit"),
-        fh.Button("Adiciona mais modulos", type="submit", name="action", value="add_modules"),
-        hx_post=f'/properties/{ppt_id}/warehouses'), open=True, header=hdr, id='dialog', hx_swap='outerHTML')
 
 def ppt_serializer(ppt) -> dict:
-    ppt['location'] = json.loads(ppt.get('location'))
-    if ppt.get('images'):
-        ppt['images'] = ppt['images'].split(',')
+    ppt["location"] = json.loads(ppt.get("location"))
+    ppt["images"] = ppt.get("images").split(",") if ppt.get("images") else s.DEFAULT_IMG
+    ppt_type = int(ppt["ppt_type"])
+    ppt["ppt_type"] = const.PPT_TYPE[ppt_type]
     return ppt
 
+
 def arrow(d):
-    return fh.Button(fh.Img(src=f"/assets/icons/arrow-{d}.svg", alt="Arrow left"),
-           cls="disabled:opacity-40 transition-opacity", id=f"slide{d.capitalize()}", aria_label=f"Slide {d}")
-    
-def carousel(items, id="carousel-container", extra_classes=""):
-    carousel_content = fh.Div(*items, id=id,
-        # cls=f"hide-scrollbar {col} lg:flex-row gap-4 lg:gap-6 rounded-l-3xl xl:rounded-3xl w-full lg:overflow-hidden xl:overflow-hidden whitespace-nowrap {extra_classes}"
+    return fh.Button(
+        fh.Img(src=f"/assets/icons/arrow-{d}.svg", alt="Arrow left"),
+        cls="disabled:opacity-40 transition-opacity",
+        id=f"slide{d.capitalize()}",
+        aria_label=f"Slide {d}",
     )
 
+
+def carousel(items, id="carousel-container"):
     arrows = fh.Div(
-        fh.Div(arrow("left"), arrow("right"),
-            # cls=f"w-[4.5rem] {between} ml-auto"
+        fh.Div(
+            arrow("left"),
+            arrow("right"),
         ),
-        # cls=f"hidden lg:flex xl:flex justify-start {maxrem(41)} py-6 pl-6 pr-20"
     )
     return fh.Div(
-        fh.Div(*items, id=id), arrows,
-        # cls=f"max-h-fit {col} items-start lg:-mr-16 {maxpx(1440)} overflow-hidden"
+        fh.Div(*items, id=id),
+        arrows,
     )
 
+
+def mk_opts(nm, cs):
+    return (fh.Option(v, value=k) for k, v in cs.items())
+
+
+async def get_body_layout(*args, **kwargs):
+    return fh.Container(
+        fh.Div(
+            *args,
+            hx_swap_oob="true",
+            id="body",
+            **kwargs,
+        )
+    )
+
+
+async def get_workspace_for(table):
+    hdr = fh.Div(
+        fh.Group(
+            fh.Input(type="search", name="search", placeholder="search"),
+            fh.Button("Search", type="submit", role="search"),
+        ),
+        fh.Select(fh.Option("Ordena por", selected="", disabled="", value="")),
+        cls="header-grid",
+    )
+    return fh.Card(
+        fh.Ul(
+            fh.Form(*table(order_by="id"), id="item-list"),
+        ),
+        header=hdr,
+    )
+
+
+def get_usr_flds(*args) -> tuple:
+    return (
+        fh.Input(name="name", type="name", placeholder="Nome"),
+        fh.Input(name="email", type="email", placeholder="Email"),
+        fh.Input(name="phone", type="phone", placeholder="Cellular"),
+        fh.Input(name="organization", type="organization", placeholder="Empresa"),
+        *args,
+    )
+
+
+def get_adrs_flds(cnb: dict | None = None) -> tuple:
+    hidden_flds = []
+    adrs_flds = [get_autocomplete_for(k) for k in s.CDRS_FK]
+    if cnb:
+        for k in s.CNB_FLDS:
+            adrs_flds.append(
+                fh.Label(const.RENAME_FLDS[k], fh.Input(name=k, disabled=True))
+            )
+            hidden_flds.append(fh.Hidden(name=k, value=cnb[k]))
+
+    else:
+        adrs_flds += [
+            fh.Label(
+                const.RENAME_FLDS[k],
+                fh.Input(name=k),
+            )
+            for k in s.CNB_FLDS
+        ]
+    return (
+        fh.Grid(
+            *adrs_flds,
+            style="grid-template-columns: 1fr 1fr 1fr",
+        ),
+        *hidden_flds,
+    )
+
+
+async def get_ppt_flds(ppt_type: int | None = None):
+    if ppt_type:
+        flds = (
+            fh.Hidden(name="ppt_type", value=ppt_type),
+            fh.Input(
+                name="ppt_type_name", value=const.PPT_TYPE[ppt_type], disabled=True
+            ),
+        )
+    else:
+        flds = (slct_fld("ppt_type", const.PPT_TYPE),)
+        ppt_type = s.PropertyType.WAREHOUSE
+    rnm = await get_renamed_flds_for(ppt_type)
+    return (
+        *flds,
+        *(
+            fh.Label(
+                fh.Input(
+                    type="checkbox",
+                    role="switch",
+                    name=k,
+                ),
+                rnm.get(k),
+            )
+            for k in s.PPT_BOOL_FLDS
+        ),
+        *(
+            fh.Label(
+                rnm.get(k),
+                fh.Input(
+                    name=k,
+                ),
+            )
+            for k in ("name", *s.PPT_COSTS_FLDS)
+        ),
+        fh.Textarea(name="description", placeholder="Descrição", rows=10),
+    )
+
+
+async def get_unit_flds(ppt_type: int):
+    flds = []
+    rnm = await get_renamed_flds_for(ppt_type)
+    for k, v in s.PPT_FRM_FLDS[ppt_type].items():
+        if v == bool:
+            flds.append(
+                fh.Label(
+                    fh.Input(
+                        type="checkbox",
+                        role="switch",
+                        name=k,
+                    ),
+                    rnm.get(k),
+                )
+            )
+        else:
+            flds.append(
+                fh.Label(
+                    rnm.get(k),
+                    fh.Input(name=k),
+                )
+            )
+    return flds
+
+
+async def get_unit_frm(sess, ppt_type: int, ppt_id: int, for_edit: bool = False):
+    hidden_flds = [
+        fh.Hidden(id="ppt_type", value=ppt_type),
+    ]
+    link = f"/ppts/{ppt_id}/units"
+    if for_edit:
+        btns = fh.Button("Salva")
+        d = {"hx_put": link}
+        hidden_flds.append(fh.Hidden(id="id"))
+    else:
+        btns = fh.Grid(
+            fh.Button("Salva e sai", id="action", value="exit"),
+            fh.Button("Adiciona mais unidades", id="action", value="add"),
+        )
+        d = {
+            "hx_post": link,
+        }
+    unit_flds = await get_unit_flds(ppt_type)
+    return fh.Form(
+        *hidden_flds,
+        broker_hide_or_slct_fld(sess),
+        user_add_or_slct_fld("owner_id"),
+        *unit_flds,
+        btns,
+        **d,
+    )
+
+
+def get_tbl_options(fld_name: str):
+    """Options for tables with name fld."""
+    tbl = s.FK_TABLES[fld_name]
+    if fld_name in const.ROLE_FLDS:
+        role = const.ROLE_FLDS[fld_name]
+        return tbl.rows_where(
+            "role = ?",
+            (role,),
+            select='name || " - " || email || " - " || id AS name, id',
+        )
+    return tbl.rows
+
+
+def get_add_frm(
+    parent_id: int, path: str, tp: str = "text", mlt: bool = False
+) -> fh.Form:
+    new_inp = fh.Input(id=f"new_{path}", name=path, type=tp, multiple=mlt)
+    add = fh.Form(
+        fh.Group(new_inp, fh.Button("+")),
+        hx_post=f"/{parent_id}/{path}",
+        target_id=f"{path}-list",
+        hx_swap="afterbegin",
+    )
+    return add
+
+
+def show_item(path: str, ppt_id: int, item: dict):
+    _path = f'/ppts/{ppt_id}/{path}/{item["id"]}'
+    if path == "imgs":
+        return fh.Div(
+            fh.Grid(
+                fh.Label(
+                    fh.Input(
+                        type="checkbox", role="switch", name="cover", value=item["id"]
+                    ),
+                    "cover",
+                ),
+                fh.Button(
+                    aria_label="Close",
+                    rel="prev",
+                    hx_delete=_path,
+                    style="margin-bottom: -2px; margin-top: 0px;",
+                ),
+            ),
+            fh.Embed(src=item["name"], type="image/jpeg", width="100%", height="200px"),
+            id=f'{path}-{item["id"]}',
+        )
+    if path == "pdfs":
+        dtls = {"href": _path, **_blank}
+    else:
+        dtls = {"hx_get": _path, "hx_target": f"#{const.INFR_EDIT}"}
+    return fh.Div(
+        fh.A(item["name"], **dtls),
+        fh.Button(
+            aria_label="Close",
+            rel="prev",
+            hx_delete=_path,
+            style="display: inline; margin: 0px; padding: 5px",
+        ),
+        style="display: inline-block; margin: 0px; padding: 5px; background-color: #e0e0e0;",
+        id=f'{path}-{item["id"]}',
+    )
+
+
+def get_layout_for(path: str, ppt_id: int, *args):
+    style = _flex
+    if path == "infrs":
+        frm = get_add_frm(ppt_id, path)
+        edit_div = fh.Div(id=const.INFR_EDIT)
+    else:
+        frm = get_add_frm(ppt_id, path, tp="file", mlt=True)
+        edit_div = None
+    if path == "imgs":
+        style = _grid
+    return fh.Div(
+        fh.Label(
+            const.RENAME_FLDS[path],
+            frm,
+        ),
+        fh.Div(*args, id=f"{path}-list", style=style),
+        edit_div,
+    )
+
+
+def get_block_for(path: str, ppt_id: int):
+    if path == "infrs":
+        i_qry = """
+        SELECT i.*
+        FROM ppt_infrastructures as p
+        LEFT JOIN infrastructures as i ON p.infr_id = i.id
+        WHERE p.ppt_id = ?
+        """
+        qry = s.db.q(i_qry, (ppt_id,))
+    else:
+        tbl = s.FILE_TABLES[path]
+        qry = tbl.rows_where("ppt_id = ?", (ppt_id,))
+    items = (show_item(path, ppt_id, i) for i in qry)
+    return get_layout_for(path, ppt_id, *items)
+
+
+def get_ppt_with_adrs(ppt_id: int) -> dict:
+    ppt_qry = """
+    SELECT p.*, c.name as city, s.name as street, r.name as region,
+    a.str_number, a.block
+    FROM properties as p
+    LEFT JOIN addresses as a ON p.adrs_id = a.id
+    LEFT JOIN cities as c ON a.city_id = c.id
+    LEFT JOIN streets as s ON a.street_id = s.id
+    LEFT JOIN districts as d ON a.district_id = d.id
+    LEFT JOIN regions as r ON a.region_id = r.id
+    WHERE p.id = ?
+    LIMIT 1
+    """
+    ppt = s.db.q(ppt_qry, (ppt_id,))
+    return ppt[0]
+
+
+def get_adrs(adrs_id: int, return_str: bool = True) -> str:
+    qry = """
+    SELECT c.name as city_id, s.name as street_id, r.name as region_id,
+    d.name as district_id, cep, a.str_number, a.block
+    FROM addresses as a
+    LEFT JOIN cities as c ON a.city_id = c.id
+    LEFT JOIN streets as s ON a.street_id = s.id
+    LEFT JOIN districts as d ON a.district_id = d.id
+    LEFT JOIN regions as r ON a.region_id = r.id
+    WHERE a.id = ?
+    LIMIT 1
+    """
+    adrs = s.db.q(qry, (adrs_id,))[0]
+    if return_str:
+        return f"{adrs['street_id']} {adrs['str_number']}, block {adrs['block']}, {adrs['city_id']}, {adrs['region_id']}"
+    return adrs
+
+
+def get_ad_ppt_type_flds() -> tuple:
+    return fh.Label(
+        const.RENAME_FLDS["ad_type"],
+        fh.Select(
+            *[
+                fh.Option(v, value=str(k))
+                for k, v in const.FILTER_FLDS["ad_type"].items()
+            ],
+            name="ad_type",
+            get="get_price_fld",
+            hx_target="#price_type",
+        ),
+    ), fh.Label(
+        const.RENAME_FLDS["ppt_type"],
+        fh.Select(
+            *[
+                fh.Option(v, value=str(k))
+                for k, v in const.FILTER_FLDS["ppt_type"].items()
+            ],
+            name="ppt_type",
+            get="get_ppts_fld",
+            hx_target="#ppt_type",
+        ),
+    )
+
+
+async def get_fltr(
+    ad_type: int = s.AdType.RENT,
+    ppt_type: int = s.PropertyType.WAREHOUSE,
+    prefil: dict | None = None,
+) -> tuple:
+    if not prefil:
+        prefil = dict()
+    ad_fld = const.AD_TYPE_FLDS[ad_type]
+    rnm = await get_renamed_flds_for(ppt_type)
+    range_flds = s.UNIT_RANGE_FLDS
+    if ppt_type == s.PropertyType.WAREHOUSE:
+        range_flds += s.WH_RANGE_FLDS
+    return (
+        get_ad_ppt_type_flds(),
+        *(slct_fld(k, const.CHOICE_TYPE) for k in s.PPT_CHOICE_FLDS),
+        *(
+            get_autocomplete_for(k, multiple=True, prefil=prefil.get(k))
+            for k in s.CDR_FK
+        ),
+        fh.Div(
+            range_container(ad_fld, **const.RANGES[ad_fld], rename=rnm[ad_fld]),
+            id="price_type",
+        ),
+        fh.Div(
+            (range_container(k, **const.RANGES[k], rename=rnm[k]) for k in range_flds),
+            id="ppt_type",
+        ),
+        *(
+            get_autocomplete_for(k, multiple=True, prefil=prefil.get(k))
+            for k in ("avcb_id", "infr_id")
+        ),
+    )
+
+
+def extract_lat_lng(address: str) -> dict | None:
+    """Return lat lng of the address"""
+    # Geocoding an address
+    geocode_result = s.gmaps.geocode(address)
+    if geocode_result:
+        goecode = geocode_result[0]
+        lat_lng = goecode.get("geometry")["location"]
+        return lat_lng
+    return None
+
+
+def broker_hide_or_slct_fld(sess: dict):
+    if sess["auth_r"] == s.Role.BROKER:
+        return fh.Hidden(name="broker_id", value=sess["auth"])
+    else:
+        cs = {o["id"]: o["name"] for o in get_tbl_options("broker_id")}
+        return slct_fld("broker_id", cs)
+
+
+def user_add_or_slct_fld(fld: str, **kwargs):
+    return fh.Label(
+        const.RENAME_FLDS[fld],
+        fh.Grid(
+            get_autocomplete_for(fld, labled=False),
+            fh.Button(
+                "+",
+                hx_get="/register",
+                data_tooltip="Cadastrar Usuario",
+                hx_target="#register",
+            ),
+            id="user",
+        ),
+        id="user",
+        **kwargs,
+    )
+
+
+async def get_ppt_units(ppt_id: int, flds: list, ad_type: int | None = None):
+    ppt = s.properties[ppt_id]
+    ppt_type = ppt.ppt_type
+    unit = s.PPT_TABLE_NAMES.get(ppt_type)
+    slct = """
+    (rent * area) as rent,
+    (sell * area) as sell,
+    """
+    if ad_type:
+        slct = [
+            """
+        (rent * area) as rent,
+        (iptu + condominium + foro + rent) * area as price,
+        """,
+            "(sell * area) as sell,",
+        ][ad_type == s.AdType.SELL]
+    if ppt_type == s.PropertyType.WAREHOUSE:
+        slct += "ROUND((area - office_area) * 100.0 / area, 1) as efficiency,"
+    qry = f"""
+    SELECT p.*, u.*,
+    c.name as city, s.name as street,
+    {slct}
+    (iptu*area) as iptu,
+    (condominium*area) as condominium,
+    ROUND(foro*area, 1) as foro
+    FROM properties as p
+    LEFT JOIN addresses as a ON p.adrs_id = a.id
+    LEFT JOIN cities as c ON a.city_id = c.id
+    LEFT JOIN streets as s ON a.street_id = s.id
+    LEFT JOIN {unit} as u ON p.id = u.ppt_id
+    WHERE p.id = ?
+    """
+
+    db_q = s.db.q(qry, (ppt_id,))
+    ppt = db_q[0]
+
+    return ppt, await get_units_tbl(db_q, ppt_type, ad_type, *flds)
+
+
+def get_min_max_modified(fld: str):
+    min_fld = f"min_{fld}"
+    max_fld = f"max_{fld}"
+    return lambda row: (
+        f"{row[min_fld]}"
+        if f"{row[min_fld]}" == f"{row[max_fld]}"
+        else f"{row[min_fld]} a {row[max_fld]}"
+    )
+
+
+def get_modification_dict(for_comparison: bool = False) -> dict:
+    md_dict = {
+        "edit": lambda row: f"<a hx-get='/ppts/{row['ppt_id']}/units/{row['id']}/edit_frm' hx-target='#dialog' hx-swap='innerHTML'>Editar</a>",
+        "select": lambda row: f'<input type="checkbox" name="selected" value="{row["id"]}">',
+        "address": lambda row: f"{row['district']} - {row['city']}",
+        "details": lambda row: f"<a hx-get='/comparisons/{row['id']}' hx-target='#dialog' hx-swap='innerHTML'>Details</a>",
+    }
+    if for_comparison:
+        md_dict.update(**{k: get_min_max_modified(k) for k in s.WH_MD_FLDS})
+    return md_dict
+
+
+async def get_units_tbl(
+    db_q, ppt_type: int, ad_type: int | None, *flds, for_comparison: bool = False
+):
+    df = pd.DataFrame(db_q)
+    bool_flds = bool_flds = (
+        list(s.WH_BOOL_FLDS)
+        if ppt_type == s.PropertyType.WAREHOUSE
+        else ["under_construction"]
+    )
+    df[bool_flds] = df[bool_flds].replace({1: "Sim", 0: "Não"})
+    flds_list = get_tbl_flds_for(ppt_type, ad_type, *flds)
+    modification_dict = get_modification_dict(for_comparison)
+    for k in flds_list:
+        if modification_dict.get(k):
+            df[k] = df.apply(modification_dict[k], axis=1)
+    rename_dict = await get_renamed_flds_for(ppt_type, price_per_month=True)
+    tbl = df[flds_list].rename(columns=rename_dict)
+    tbl = tbl.transpose()
+    return tbl
+
+
+async def get_infr(ppt_id: int):
+    qry = """
+    SELECT name
+    FROM ppt_infrastructures as pi
+    LEFT JOIN infrastructures as i ON pi.infr_id = i.id
+    WHERE ppt_id = ?
+    """
+    db_q = s.db.q(qry, (ppt_id,))
+    return fh.Label(
+        fh.H2("Infraestrutura:"),
+        fh.Grid(
+            *(fh.Li(i["name"]) for i in db_q),
+            style="grid-template-columns: 1fr 1fr",
+        ),
+    )
+
+
+async def get_embeded_imgs(ppt_id: int, **kwargs):
+    return (
+        fh.Embed(src=i["name"], type="image/jpeg", width="100%", height="200px")
+        for i in s.ppt_images.rows_where("ppt_id = ?", (ppt_id,), **kwargs)
+    )
+
+
+async def get_imgs(ppt_id):
+    n = s.ppt_images.count_where("ppt_id = ?", (ppt_id,))
+    return fh.Div(
+        fh.Grid(
+            *(await get_embeded_imgs(ppt_id, limit=3)),
+            style="grid-template-columns: 1fr 1fr 1fr",
+        ),
+        fh.Button(f"Ver {n} fotos", hx_get=f"/{ppt_id}/imgs", hx_target="#dialog"),
+    )
+
+
+async def get_ppt_infr_img_units(
+    ppt_id: int, user_id: int, tbl_flds: list, *submit_btns, ad_type: int | None = None
+):
+    (ppt, tbl), inf, img = await asyncio.gather(
+        get_ppt_units(ppt_id, tbl_flds, ad_type),
+        get_infr(ppt_id),
+        get_imgs(ppt_id),
+    )
+    btns = {"submit": (add_btn_for(k) for k in submit_btns)}
+    if "edit" in tbl_flds:
+        btns["edit"] = fh.AX(
+            "Edit",
+            hx_get=f"/ppts/{ppt_id}/edit",
+            hx_target="#dialog",
+        )
+        btns["add_unit"] = add_btn_for(
+            "unit_frm",
+            name="+",
+            data_tooltip=const.RENAME_FLDS["unit_frm"],
+            hx_target="#dialog",
+        )
+        if ppt["pdf_path"]:
+            path = ppt["pdf_path"]
+            btns["pdf_path"] = fh.A(
+                "Mostrar arquivo", href=f"/pdf?pdf_path={path}", **_blank
+            )
+    return fh.Titled(
+        f'{const.PPT_TYPE.get(ppt["ppt_type"])} RET{ppt_id:03d}',
+        fh.Grid(
+            fh.P(f"{ppt['street']} - {ppt['city']}", id="address"),
+            btns.get("edit"),
+        ),
+        img,
+        fh.Label(fh.H2("Descricao:"), _for="description"),
+        fh.Div(ppt["description"], id="description"),
+        inf,
+        btns.get("pdf_path"),
+        fh.Label(fh.Grid(fh.H2("Unidades:"), btns.get("add_unit")), _for="#modules"),
+        fh.Form(
+            fh.Hidden(id="user_id", value=user_id),
+            fh.Hidden(id="ppt_id", value=ppt_id),
+            fh.Hidden(id="ppt_type", value=ppt["ppt_type"]),
+            fh.Hidden(id="ad_type", value=ad_type),
+            fh.NotStr(tbl.to_html(escape=False, header=False)),
+            id="modules",
+            cls="table-container",
+        ),
+        *btns.get("submit"),
+        fh.Div(id="dialog"),
+        fh.Div(id="register"),
+        id="result",
+    )
+
+
+async def create_cmp(data: dict, unit_ids: list[str]):
+    qry = "&".join(f"{k}={v}" for k, v in data.items())
+    ppt_type = data.pop("ppt_type")
+    cmp = s.comparisons.insert(
+        {
+            **data,
+            "status": s.Status.NEW,
+            "date": dt.now().strftime("%Y/%m/%d, %H:%M:%S"),
+        }
+    )
+    cmp_table = s.PPT_CMP_TABLES.get(int(ppt_type))
+    for id in unit_ids:
+        cmp_table.insert(comparison_id=cmp["id"], unit_id=int(id))
+    return fh.A("Ver comparações", type="submit", href=f"/comparisons?{qry}", **_blank)
+
+
+async def get_cmp_for(data: dict, flds: tuple, return_frm: bool = False):
+    ppt_type = int(data["ppt_type"])
+    ad_type = int(data["ad_type"])
+    user_id = int(data["user_id"])
+    where_fld = "WHERE cmp.user_id = ? AND cmp.ad_type = ? AND NOT cmp.status = ? AND p.ppt_type = ?"
+    params = (user_id, ad_type, s.Status.ARCHIVE, ppt_type)
+    if data.get("selected"):
+        placeholders = ", ".join(["?" for _ in data["selected"]])
+        where_fld = f"WHERE cmp.id IN ({placeholders})"
+        params = data["selected"]
+    table = s.PPT_TABLE_NAMES.get(ppt_type)
+    cmp_table = s.PPT_CMP_TABLES.get(ppt_type)
+    slct = (
+        "SUM(sell*area) AS sell,"
+        if ad_type == s.AdType.SELL
+        else "SUM(rent*area) AS rent, SUM((iptu + condominium + foro + rent) * area) as price,"
+    )
+    slct += ", ".join(f"SUM({k}*area) as {k}" for k in s.PPT_COSTS_FLDS) + ", "
+    if ppt_type == s.PropertyType.WAREHOUSE:
+        slct += (
+            "ROUND(SUM(area - office_area) * 100.0 / SUM(area), 1) as efficiency,"
+            + ", ".join(f"m.{k}" for k in s.WH_BOOL_FLDS)
+            + ", "
+            + ", ".join(f"SUM({k}) AS {k}" for k in ("docks", "office_area"))
+            + ", "
+            + ", ".join(
+                f"{m.upper()}({k}) AS {m}_{k}"
+                for k in s.WH_MD_FLDS
+                for m in ("min", "max")
+            )
+            + ", "
+        )
+    qry = f"""
+    SELECT cmp.id as id, p.name, p.ppt_type, d.name as district, c.name as city, a.location,
+    GROUP_CONCAT(m.title, ', ') as title,
+    {slct}
+    SUM(area) as area
+    FROM comparisons as cmp
+    LEFT JOIN properties as p ON cmp.ppt_id = p.id
+    LEFT JOIN addresses as a ON p.adrs_id = a.id
+    LEFT JOIN districts AS d ON a.district_id = d.id
+    LEFT JOIN cities AS c ON a.city_id = c.id
+    LEFT JOIN {cmp_table} as cmp_m ON cmp.id = cmp_m.comparison_id
+    LEFT JOIN {table} as m ON cmp_m.unit_id = m.id
+    {where_fld}
+    GROUP BY cmp.id
+    """
+    db_q = s.db.q(qry, params)
+    locations = [
+        {"index": i + 1, "location": json.loads(d.get("location"))}
+        for i, d in enumerate(db_q)
+    ]
+    tbl = await get_units_tbl(db_q, ppt_type, ad_type, *flds, for_comparison=True)
+    if return_frm:
+        tbl = fh.Form(
+            fh.Hidden(id="user_id", value=user_id),
+            fh.Hidden(id="ad_type", value=ad_type),
+            fh.Hidden(id="ppt_type", value=ppt_type),
+            fh.NotStr(tbl.to_html(escape=False, header=False)),
+            fh.Button("Download site selection", id="download_btn"),
+            action="/download_pdf",
+            method="post",
+            id="comparisons",
+            cls="table-container",
+        )
+    return tbl, locations
+
+
+async def create_pdf(data: dict, output_pdf):
+    """Create pdf using reportlab."""
+    ppt_type = int(data["ppt_type"])
+    ad_type = int(data["ad_type"])
+    user_id = int(data["user_id"])
+    where_fld = "WHERE cmp.user_id = ? AND cmp.ad_type = ? AND NOT cmp.status = ? AND p.ppt_type = ?"
+    params = (user_id, ad_type, s.Status.ARCHIVE, ppt_type)
+    if data.get("selected"):
+        placeholders = ", ".join(["?" for _ in data["selected"]])
+        where_fld = f"WHERE cmp.id IN ({placeholders})"
+        params = data["selected"]
+    flds = ("address", "name")
+    tbl, locations = await get_cmp_for(data, flds)
+    qry_img = f"""
+    SELECT cmp.id,
+    GROUP_CONCAT(DISTINCT pi.name) as img,
+    GROUP_CONCAT(DISTINCT i.name) as infr
+    FROM comparisons as cmp
+    LEFT JOIN properties as p ON cmp.ppt_id = p.id
+    LEFT JOIN ppt_images as pi ON p.id = pi.ppt_id
+    LEFT JOIN ppt_infrastructures as p_i ON p.id = p_i.ppt_id
+    LEFT JOIN infrastructures as i ON p_i.infr_id = i.id
+    {where_fld}
+    GROUP BY cmp.id
+    """
+    db_imgs = s.db.q(qry_img, params)
+
+    # Register fonts
+    pdfmetrics.registerFont(TTFont("Poppins", "assets/fonts/Poppins-Regular.ttf"))
+
+    # Create a PPTF
+    pdf_canvas = canvas.Canvas(
+        output_pdf, pagesize=(const.PAGE_WIDTH, const.PAGE_HEIGHT), pageCompression=1
+    )
+    # First page
+    pdf_canvas.drawImage(
+        const.COVER_BGD, 0, 0, width=const.PAGE_WIDTH, height=const.PAGE_HEIGHT
+    )
+    pdf_canvas.setFont("Poppins", 60)
+    pdf_canvas.setFillColor(colors.white)
+    pdf_canvas.drawString(const.LR_PADDING, const.TOP_PADDING, "Opções para locação")
+    pdf_canvas.drawString(const.LR_PADDING, const.TOP_PADDING - 60, "Limeira e região")
+
+    # Bookmark the first page and add an outline entry
+    pdf_canvas.bookmarkPage("first_page")
+    pdf_canvas.addOutlineEntry("Cover", "first_page", level=0)
+
+    pdf_canvas.showPage()
+
+    # About page
+    pdf_canvas.drawImage(
+        const.ABOUT_BGD, 0, 0, width=const.PAGE_WIDTH, height=const.PAGE_HEIGHT
+    )
+
+    # Bookmark the about page and add an outline entry
+    pdf_canvas.bookmarkPage("about_page")
+    pdf_canvas.addOutlineEntry("About", "about_page", level=0)
+
+    pdf_canvas.showPage()
+
+    # Step 1: Define a form XObject for the background
+    pdf_canvas.beginForm("background_form")
+    pdf_canvas.drawImage(
+        const.BODY_BGD, 0, 0, width=const.PAGE_WIDTH, height=const.PAGE_HEIGHT
+    )
+    pdf_canvas.endForm()
+
+    # Second page (static map and links)
+    pdf_canvas.doForm("background_form")
+
+    # Insert static map
+    pdf_canvas.drawImage(const.static_map_image, 400, 200, width=1200, height=800)
+
+    locations_list = (
+        (
+            f"Imóvel_{i['index']:02d}",
+            f"https://www.google.com/maps?q={i['location']['lat']},{i['location']['lng']}",
+        )
+        for i in locations
+    )
+    # Add "See on map" links
+    y_position = 150
+    pdf_canvas.setFont("Poppins", 40)
+    pdf_canvas.drawString(400, y_position, "See on map:")
+    w = 250
+    for idx, (label, url) in enumerate(locations_list, start=1):
+        pdf_canvas.drawString(400 + idx * w, y_position, label)
+        pdf_canvas.linkURL(
+            url, (400 + idx * w, y_position, 400 + idx * w + w, y_position + 40)
+        )
+
+    # Bookmark the map page and add an outline entry
+    pdf_canvas.bookmarkPage("map_page")
+    pdf_canvas.addOutlineEntry("Map and Locations", "map_page", level=0)
+
+    pdf_canvas.showPage()
+
+    # Add Table Page (with 2.jpg background)
+    pdf_canvas.doForm("background_form")
+
+    # Create a ReportLab stylesheet for Paragraphs
+    styles = getSampleStyleSheet()
+
+    # Define a custom ParagraphStyle with increased font size
+    custom_style = ParagraphStyle(
+        name="Custom",
+        fontName="Poppins",  # Use Poppins font or your preferred font
+        fontSize=25,  # Set desired font size here
+        leading=28,  # Set line height (optional)
+        # alignment=1,  # Center align (optional)
+    )
+    # Convert the DataFrame headers and rows to Paragraphs
+    data = []
+    header_row = [Paragraph("Imóvel", custom_style)] + [
+        Paragraph(f"{i + 1:02d}", custom_style) for i in tbl.columns
+    ]
+    data.append(header_row)
+    # Convert each row in the DataFrame to Paragraphs
+    for index, row in tbl.iterrows():
+        row_data = [Paragraph(str(index), custom_style)] + [
+            Paragraph(str(cell), custom_style) for cell in row
+        ]
+        data.append(row_data)
+
+    # Dynamically calculate column widths based on page size and padding
+    available_width = const.PAGE_WIDTH - 2 * const.LR_PADDING
+    col_width = available_width / len(data[0])
+    tbl_width = [col_width] * len(data[0])
+
+    # Create a table with dynamically calculated column widths
+    table = Table(data, colWidths=tbl_width)
+
+    # Define table style with increased font size
+    table.setStyle(
+        TableStyle(
+            [
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (-1, 1),
+                    colors.lightblue,
+                ),  # Header background color
+                ("TEXTCOLOR", (0, 0), (-1, 1), colors.whitesmoke),  # Header text color
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("FONTNAME", (0, 0), (-1, -1), "Poppins"),
+                ("FONTSIZE", (0, 0), (-1, -1), 46),  # Increased font size
+                (
+                    "VALIGN",
+                    (0, 0),
+                    (-1, -1),
+                    "TOP",
+                ),  # Align text to the top of the cell
+                # ('BOTTOMPADDING', (0, 0), (-1, -1), 16),
+                ("BACKGROUND", (0, 2), (-1, -1), colors.beige),  # Body background color
+                ("GRID", (0, 0), (-1, -1), 1, colors.black),
+            ]
+        )
+    )
+
+    # Table height for calculating col positions (assumes uniform col heights)
+    first_col_y = (
+        const.PAGE_HEIGHT - const.TOP_PADDING
+    )  # Starting y-position for the first col
+    col_height = 40
+
+    # Add links manually for the first column cols
+    for col_idx in tbl.columns:
+        header_number = f"{col_idx + 1:02d}"
+
+        # Calculate the y position of each col's cell
+        col_x_position = const.LR_PADDING + (col_idx + 1) * col_width
+
+        # Define the clickable rectangle (adjust left/right as needed)
+        link_rect = (
+            col_x_position,
+            first_col_y,
+            col_x_position + col_width,
+            first_col_y - col_height,
+        )
+
+        # Add the clickable area linking to the bookmark
+        pdf_canvas.linkRect(header_number, header_number, link_rect)
+
+    # Wrap and draw the table
+    table_width, table_height = table.wrap(
+        const.PAGE_WIDTH, const.PAGE_HEIGHT - const.TOP_PADDING
+    )
+    table.drawOn(
+        pdf_canvas,
+        const.LR_PADDING,
+        const.PAGE_HEIGHT - const.TOP_PADDING - table_height,
+    )
+
+    # Bookmark the table page and add an outline entry
+    pdf_canvas.bookmarkPage("table_page")
+    pdf_canvas.addOutlineEntry("Table Overview", "table_page", level=0)
+
+    pdf_canvas.showPage()
+
+    # Add Dynamic Pages for each comparison
+    for idx in tbl.columns:
+        header_number = f"{idx + 1:02d}"
+
+        # Bookmark each row dynamically and add to the outline
+        pdf_canvas.bookmarkPage(header_number)
+        pdf_canvas.addOutlineEntry(
+            f"Details for Column {idx + 1}", header_number, level=1
+        )
+
+        # Create two pages for each row
+        pdf_canvas.doForm("background_form")
+        pdf_canvas.setFont("Poppins", 40)
+        pdf_canvas.drawString(
+            const.LR_PADDING,
+            const.PAGE_HEIGHT - const.TOP_PADDING + 100,
+            f"Imóvel {idx + 1:02d}",
+        )
+
+        column_data = (
+            tbl[idx].reset_index().values.tolist()
+        )  # Converts the column into a list of [index, value] pairs
+        table1 = Table(column_data[:-5], colWidths=[350] * 2)
+        # Define table style with increased font size
+        table1.setStyle(
+            TableStyle(
+                [
+                    (
+                        "BACKGROUND",
+                        (0, 0),
+                        (0, -1),
+                        colors.lightblue,
+                    ),  # Header background color
+                    (
+                        "TEXTCOLOR",
+                        (0, 0),
+                        (0, -1),
+                        colors.whitesmoke,
+                    ),  # Header text color
+                    ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                    ("FONTNAME", (0, 0), (-1, -1), "Poppins"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 26),  # Increased font size
+                    (
+                        "VALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "TOP",
+                    ),  # Align text to the top of the cell
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 30),
+                    (
+                        "BACKGROUND",
+                        (1, 0),
+                        (1, -1),
+                        colors.beige,
+                    ),  # Body background color
+                    ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                ]
+            )
+        )
+        # Wrap and draw the table
+        table1_width, table1_height = table1.wrap(
+            const.PAGE_WIDTH, const.PAGE_HEIGHT - const.TOP_PADDING
+        )
+        table1.drawOn(
+            pdf_canvas,
+            const.LR_PADDING,
+            const.PAGE_HEIGHT - const.TOP_PADDING - table1_height,
+        )
+        table2 = Table(column_data[-5:], colWidths=[350] * 2)
+        # Define table style with increased font size
+        table2.setStyle(
+            TableStyle(
+                [
+                    (
+                        "BACKGROUND",
+                        (0, 0),
+                        (0, -1),
+                        colors.lightblue,
+                    ),  # Header background color
+                    (
+                        "TEXTCOLOR",
+                        (0, 0),
+                        (0, -1),
+                        colors.whitesmoke,
+                    ),  # Header text color
+                    ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                    ("FONTNAME", (0, 0), (-1, -1), "Poppins"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 26),  # Increased font size
+                    (
+                        "VALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "TOP",
+                    ),  # Align text to the top of the cell
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 30),
+                    (
+                        "BACKGROUND",
+                        (1, 0),
+                        (1, -1),
+                        colors.beige,
+                    ),  # Body background color
+                    ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                ]
+            )
+        )
+        # Wrap and draw the table
+        table2_width, table2_height = table2.wrap(
+            const.PAGE_WIDTH, const.PAGE_HEIGHT - const.TOP_PADDING
+        )
+        table2.drawOn(
+            pdf_canvas,
+            const.LR_PADDING + 1000,
+            const.PAGE_HEIGHT - const.TOP_PADDING - table2_height - 300,
+        )
+
+        img_list = db_imgs[idx]["img"].split(",")
+        infr_list = db_imgs[idx]["infr"].split(",")
+
+        if img_list:
+            pdf_canvas.drawImage(
+                img_list[0][1:],
+                const.LR_PADDING + 1000,
+                const.PAGE_HEIGHT - const.TOP_PADDING - 300,
+                width=700,
+                height=300,
+            )
+        pdf_canvas.showPage()
+        pdf_canvas.doForm("background_form")
+        for i in range(1, 3):
+            try:
+                pdf_canvas.drawImage(
+                    img_list[i][1:],
+                    const.LR_PADDING,
+                    const.PAGE_HEIGHT - const.TOP_PADDING - 330 * i,
+                    width=700,
+                    height=300,
+                )
+            except IndexError:
+                break
+        col = [[Paragraph("Infraestrutura:", custom_style)]] + [
+            [Paragraph(f"•  {c}", custom_style)] for c in infr_list
+        ]
+        table3 = Table(col, colWidths=const.PAGE_WIDTH / 2 - const.LR_PADDING)
+        # Define table style
+        table3.setStyle(
+            TableStyle(
+                [
+                    (
+                        "BACKGROUND",
+                        (1, 0),
+                        (-1, -1),
+                        colors.transparent,
+                    ),  # Body background color
+                    ("GRID", (0, 0), (-1, -1), 0, colors.transparent),
+                ]
+            )
+        )
+        # Wrap and draw the table
+        table3_width, table3_height = table3.wrap(
+            const.PAGE_WIDTH, const.PAGE_HEIGHT - const.TOP_PADDING
+        )
+        table3.drawOn(
+            pdf_canvas,
+            const.PAGE_WIDTH / 2,
+            const.PAGE_HEIGHT - const.TOP_PADDING - table3_height,
+        )
+
+        pdf_canvas.showPage()
+    # Last page (background 1.jpg)
+    pdf_canvas.drawImage(
+        const.LAST_PAGE_BGD, 0, 0, width=const.PAGE_WIDTH, height=const.PAGE_HEIGHT
+    )
+
+    # Bookmark the last page and add an outline entry
+    pdf_canvas.bookmarkPage("last_page")
+    pdf_canvas.addOutlineEntry("Last Page", "last_page", level=0)
+
+    # Save the PPTF
+    pdf_canvas.save()
+
+
+def task_frm(sess: dict, prefil: dict = dict()):
+    return fh.Form(
+        user_add_or_slct_fld("client_id"),
+        *(slct_fld(k, const.FILTER_FLDS[k]) for k in s.TSK_SLC_FLDS),
+        fh.Label("Descrição", fh.Textarea(name="initial_dscr", rows=10)),
+        broker_hide_or_slct_fld(sess),
+        fh.Button("Next", type="submit"),
+        hx_post="/tasks",
+        hx_target="#dialog",
+    )
+
+
+def add_btn_for(path: str, include: str = "modules", name: str | None = None, **kwargs):
+    nm = name if name else const.RENAME_FLDS[path]
+    return fh.Button(
+        nm,
+        type="submit",
+        hx_post=f"/{path}",
+        hx_include=f"#{include}",
+        hx_swap="outerHTML",
+        **kwargs,
+    )
+
+
+async def get_ppt_frm(adrs_id: int, ppt_type: int, ppt_id: int | None = None):
+    hiddens = [
+        fh.Hidden(id="adrs_id", value=adrs_id),
+    ]
+    if ppt_id:
+        hiddens.append(fh.Hidden(id="id", value=ppt_id))
+        d = {"hx_put": "/ppts", "id": "ppt_edit"}
+        btns = fh.Button("Save")
+    else:
+        d = {"hx_post": "/ppts"}
+        btns = fh.Grid(
+            fh.Button("Back", hx_get="/adrs_frm"),
+            fh.Button("Next"),
+        )
+    return fh.Form(
+        *hiddens,
+        await get_ppt_flds(ppt_type),
+        get_autocomplete_for("avcb_id"),
+        btns,
+        **d,
+    )
+
+
+def test_script(prefix: str, multiple: bool):
+    value = (
+        f'me("#{prefix}").value = "";'
+        if multiple
+        else f'me("#{prefix}").value = value;'
+    )
+    return f"""
+    // Show dropdown and filter options when typing
+    me("#{prefix}").on("input", ev => {{
+        let filter = me(ev).value.toLowerCase();
+        let options = any("#{prefix}_dropdown li");
+
+        options.forEach(option => {{
+            if (option.textContent.toLowerCase().includes(filter)) {{
+                option.style.display = "";  // Show matching option
+            }} else {{
+                option.style.display = "none";  // Hide non-matching option
+            }}
+        }});
+
+        me("#{prefix}_dropdown").style.display = "block";  // Show dropdown
+    }});
+
+    // Select an option from the dropdown
+    any("#{prefix}_dropdown li").on("click", ev => {{
+        let value = me(ev).textContent;
+        
+        {value}
+        me("#{prefix}_dropdown").style.display = "none";  // Hide dropdown after selection
+    }});
+
+    // Close the dropdown when clicking outside the input or dropdown
+    document.addEventListener("click", function(event) {{
+        let input = me("#{prefix}");
+        let dropdown = me("#{prefix}_dropdown");
+
+        // Close dropdown if the click is outside the input or dropdown
+        if (!input.contains(event.target) && !dropdown.contains(event.target)) {{
+            dropdown.style.display = "none";
+        }}
+    }});
+    
+    // Add custom option on Enter key press for multiple selections
+    me("#{prefix}").on("keydown", ev => {{
+        if (ev.key === "Enter") {{
+            ev.preventDefault();  // Prevent form submission
+            let value = me("#{prefix}").value.trim();
+            let prefix = "{prefix}";
+            if (value) {{
+                if ({'true' if multiple else 'false'}) {{
+                    me("#{prefix}").value = "";  // Clear input after Enter for multiple
+                }} else {{
+                    me("#{prefix}").value = value;  // For single selection, put the value in the input
+                }}
+                me("#{prefix}_dropdown").style.display = "none";  // Hide dropdown
+            }}
+        }}
+    }});
+    """
+
+
+def test(
+    prefil: list = ["Minsk", "Moscow"],
+    field: str = "city_id",
+    multiple: bool = True,
+    tp: str = "text",
+    labled: bool = True,
+):
+    fld = (
+        fh.Input(
+            id=field,
+            type=tp,
+            placeholder=const.RENAME_FLDS[field],
+            autocomplete="off",  # Disable default browser autocomplete
+        ),
+    )
+    # fld = fh.Group(
+    #     fh.Input(
+    #         id=field, type=tp, placeholder=const.RENAME_FLDS[field],
+    #         autocomplete="off",  # Disable default browser autocomplete
+    #     ),
+    #     fh.Button(
+    #         "+",
+    #         type='submit',
+    #         hx_get='/autocomplete',
+    #         hx_include=f'#{field}',
+    #         target_id=f'{field}_selected',
+    #         hx_swap='afterbegin',
+    #         id='prefix',
+    #         value=field,
+    #     )
+    # )
+    # fld = fh.Form(
+    #     fh.Hidden(id='prefix', value=field),
+    #     fh.Input(
+    #         id=field, type=tp, placeholder=const.RENAME_FLDS[field],
+    #         autocomplete="off"  # Disable default browser autocomplete
+    #     ),
+    #     **on_input
+    # )
+    if labled:
+        fld = fh.Label(
+            const.RENAME_FLDS[field],
+            fld,
+        )
+
+    return fh.Div(
+        fld,
+        fh.Ul(
+            *[
+                fh.Li(
+                    option["name"],
+                    value=option["id"],
+                    cls="dropdown-item",
+                    # hx_trigger='click',
+                    # hx_get=f'/autocomplete?{field}={option["name"]}&prefix={field}&id={option["id"]}',
+                    # target_id=f'{field}_selected',
+                    # hx_swap='afterbegin',
+                )
+                for option in get_tbl_options(field)
+            ],  # Render the options dynamically with class
+            id=f"{field}_dropdown",
+            cls="dropdown-list",
+            style="display:none;",  # Hide dropdown initially
+        ),
+        fh.Div(
+            *[mult_choice(field, s) for s in prefil] if prefil else None,
+            id=f"{field}_selected",
+            cls="selected-container",
+            style="display: flex;",
+        ),  # Container for selected options
+        fh.Div(
+            id=f"{field}_hidden"
+        ),  # Container for hidden inputs (submitted with form)
+        fh.Script(
+            autocomplete_script(field, multiple)
+        ),  # Add the dynamic filtering and selection script
+    )
+
+
+def mult_choice(item: str, prefix: str):
+    return fh.Div(
+        fh.Hidden(id=prefix, value=item),
+        fh.Span(
+            item,
+            fh.Button("x", hx_get=f"/cls_details/{prefix}_{item}"),
+            cls="selected-item",
+        ),
+        id=f"{prefix}_{item}",
+    )

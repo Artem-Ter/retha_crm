@@ -1,4 +1,3 @@
-
 import mysettings as s
 
 DESCR = 'test description'
@@ -6,22 +5,50 @@ DESCR = 'test description'
 NA = 'not_available'
 ZERO = 0
 ANONIM = 'anonim'
+INFR_EDIT = 'edit-infr'
+
+FLTR_MULT_CHOICE_FLDS = (
+    'city_id',
+    'region_id',
+    'district_id',
+    'infr_id',
+    'avcb_id',
+)
+
+EMPLOYEES = (
+    s.Role.BROKER,
+    s.Role.ADMIN,
+    s.Role.SECRETARY,
+)
+
+STATUS_TYPE = {
+    s.Status.ACTIVE: 'Ativo',
+    s.Status.ARCHIVE: 'Arquivado',
+    s.Status.NEW: 'Novo',
+}
 
 SECRETARY_REGISTER = {
-    s.Role.BROKER: 'Corretor',
     s.Role.OWNER: 'Proprietário',
     s.Role.USER: 'Usuário',
 }
 
-ADMIN_REGISTER = {
+ROLE_TYPE = {
+    s.Role.BROKER: 'Corretor',
     s.Role.ADMIN: 'Administrador',
     s.Role.SECRETARY: 'Secretária',
     **SECRETARY_REGISTER
 }
 
-AVCB_TYPE = {
-    s.Avcb.opt1: 'opt1',
-    s.Avcb.opt2: 'opt2'
+ROLE_FLDS = {
+    'client_id': s.Role.USER,
+    'broker_id': s.Role.BROKER,
+    'owner_id': s.Role.OWNER,
+}
+
+ROLE_FK = {
+    s.Role.USER: 'client_id',
+    s.Role.BROKER: 'broker_id',
+    s.Role.OWNER: 'owner_id',
 }
 
 CHOICE_TYPE = {
@@ -37,207 +64,132 @@ PPT_TYPE = {
     s.PropertyType.SHOP: 'Loja'
 }
 
-PPT_TABLE = {
-    s.PropertyType.WAREHOUSE: 'warehouses',
-    s.PropertyType.LAND: 'lands',
-    s.PropertyType.OFFICE: 'offices',
-    s.PropertyType.SHOP: 'shops'
-}
-
-CMP_TABLE = {
-    s.PropertyType.WAREHOUSE: s.warehouse_comparisons,
-    s.PropertyType.LAND: s.land_comparisons,
-    s.PropertyType.OFFICE: s.office_comparisons,
-    s.PropertyType.SHOP: s.shop_comparisons,
-}
 AD_TYPE = {
-    s.AdType.SELL: 'Venda',
     s.AdType.RENT: 'Locacão',
+    s.AdType.SELL: 'Venta',
 }
 
-ZONE = {
-    s.Zone.NORTH: 'NORTE',
-    s.Zone.EAST: 'LESTE',
-    s.Zone.WEST: 'OESTE',
-    s.Zone.SOUTH: 'SUL',
-    s.Zone.CENTER: 'CENTRO',
+AD_TYPE_FLDS = {
+    s.AdType.RENT: 'rent',
+    s.AdType.SELL: 'sell',
 }
 
-ADDRESS_FLDS = {
+# ZONE = {
+#     s.Zone.NORTH: 'NORTE',
+#     s.Zone.EAST: 'LESTE',
+#     s.Zone.WEST: 'OESTE',
+#     s.Zone.SOUTH: 'SUL',
+#     s.Zone.CENTER: 'CENTRO',
+# }
+R_M2 = 'R$/m2'
+R_MONTH = 'R$/mes'
+
+RENAME_FLDS = {
+    'select': 'Selecionados',
+    'edit': 'Editar',
+    'name': 'Nome de Condominio / Monousuário',
     'cep': 'CEP',
     'street': 'Rua',
-    'number': 'Numero',
+    'str_number': 'Numero',
+    'block': 'Complemento',
     'district': 'Bairo',
     'city': 'Cidade',
     'region': 'Região',
-}
-
-COSTS = {
-    'iptu': 'IPTU, R$/m2',
-    'condominium': 'Condomínio, R$/m2',
-    'foro': 'Foro, R$/m2',
-}
-
-
-SLCT_FLD = {
-    'modify': {
-        'select': lambda row: f'<input type="checkbox" name="select_{row["id"]}" value="{row["id"]}">'
-    },
-    'rename': {'select': 'Selecionados'},
-}
-
-CMP_MODIFY = {
-    'address': lambda row: f"{row['district']} - {row['city']}",
-    'flr_capacity': lambda row: (f"{row['min_flr_capacity']}"
-                                 if f"{row['min_flr_capacity']}" == f"{row['max_flr_capacity']}"
-                                 else f"{row['min_flr_capacity']} a {row['max_flr_capacity']}"),
-    'details': lambda row: f"<a hx-get='/comparisons/{row['id']}/{row['ppt_type']}' hx-target='#dialog' hx-swap='innerHTML'>Details</a>",
-    'available': lambda row: (f"{row['min_available']}"
-                              if f"{row['min_available']}" == f"{row['max_available']}"
-                              else f"{row['min_available']} a {row['max_available']}"),
-    'height': lambda row: (f"{row['min_height']}"
-                          if f"{row['min_height']}" == f"{row['max_height']}"
-                          else f"{row['min_height']} a {row['max_height']}"),
-    'energy': lambda row: (f"{row['min_energy']}"
-                            if f"{row['min_energy']}" == f"{row['max_energy']}"
-                            else f"{row['min_energy']} a {row['max_energy']}"),
-    'width': lambda row: (f"{row['min_width']}"
-                          if f"{row['min_width']}" == f"{row['max_width']}"
-                          else f"{row['min_width']} a {row['max_width']}"),
-}
-
-FLDS_MODIFICATIONS = {
-    'rent':{
-        'comparisons': {
-            **SLCT_FLD['modify'],
-            **CMP_MODIFY,
-            # 'height': lambda row: (f"{row['min_height']}"
-            #                               if f"{row['min_height']}" == f"{row['max_height']}"
-            #                               else f"{row['min_height']} a {row['max_height']}"),
-        },
-    }
-}
-
-RENAME = {
-    'select': 'Selecionados',
+    'iptu': 'IPTU',
+    'condominium': 'Condomínio',
+    'foro': 'Foro',
     'details': 'Detalhes',
-    'title': 'Ref.',
+    'title': 'Unidade',
     'address': 'Endereço',
-    'cep': 'CEP',
-    'street': 'Rua',
-    'number': 'Numero',
-    'district': 'Bairro',
-    'city': 'Cidade',
-    'region': 'Região',
     'available': 'Disponível',
     'height': 'Pé direito, m',
     'efficiency': 'Eficiência logistica, %',
-    'abl': 'ABL, m2',
     'docks': 'Docas',
     'flr_capacity': 'Piso, ton/m2',
     'office_area': 'Escritório / Mezanino, m2',
     'energy': 'Capacidade Elétrica, kVa',
     'width': 'Entre pilares, m',
-    'condominium': 'Condominio, R$/mes',
-    'iptu': 'IPTU, R$/mes',
-    'foro': 'Foro, R$/mes',
-    'rent': 'Locacão, R$/mes',
-    'sell': 'Venta, R$',
-    'price': 'Total, R$/mes',
+    'rent': 'Locacão',
+    'sell': 'Venta',
+    'price': 'Preço',
+    'client_id': 'Cliente',
+    'broker_id': 'Corretor',
+    'owner_id': 'Proprietario',
+    'infr_id': 'Infraestrutura',
+    'street_id': 'Rua',
+    'district_id': 'Bairo',
+    'city_id': 'Cidade',
+    'region_id': 'Região',
+    'avcb_id': 'AVCB',
+    'area': 'Area Total, m2',
+    'in_conodminium': 'Em condomínio',
+    'on_site': 'Publicar no Site',
+    'retha_admin': 'Administração Retha',
+    'under_construction': 'Em construção',
+    'sprinklers': 'Sprinklers',
+    'dock_leveler': 'Nivelador de doca',
+    'refrigeration': 'Refrigeração',
+    'between_pilars': 'Entre pilares, m x m',
+    'ppt_type': 'Tipo de propriedade',
+    'ad_type': 'Tipo de anúncio',
+    'role': 'Role',
+    'archives': 'Arquivar',
+    'visits': 'Agendar visita',
+    'download_pdf': 'Download site selection',
+    'comparisons': 'Adicionar à comparação',
+    'unit_frm': 'Adicionar unidade',
+    'infrs': 'Infraestrutura:',
+    'pdfs': 'PDF:',
+    'imgs': 'Fotos:',
 }
 
-MODIFICATIONS = {
-    'select': lambda row: f'<input type="checkbox" name="select_{row["id"]}" value="{row["id"]}">',
-    'address': lambda row: f"{row['district']} - {row['city']}",
-    'flr_capacity': lambda row: (f"{row['min_flr_capacity']}"
-                                 if f"{row['min_flr_capacity']}" == f"{row['max_flr_capacity']}"
-                                 else f"{row['min_flr_capacity']} a {row['max_flr_capacity']}"),
-    'details': lambda row: f"<a hx-get='/comparisons/{row['id']}/{row['ppt_type']}' hx-target='#dialog' hx-swap='innerHTML'>{RENAME['details']}</a>",
-    'available': lambda row: (f"{row['min_available']}"
-                              if f"{row['min_available']}" == f"{row['max_available']}"
-                              else f"{row['min_available']} a {row['max_available']}"),
-    'height': lambda row: (f"{row['min_height']}"
-                          if f"{row['min_height']}" == f"{row['max_height']}"
-                          else f"{row['min_height']} a {row['max_height']}"),
-    'energy': lambda row: (f"{row['min_energy']}"
-                            if f"{row['min_energy']}" == f"{row['max_energy']}"
-                            else f"{row['min_energy']} a {row['max_energy']}"),
-    'width': lambda row: (f"{row['min_width']}"
-                          if f"{row['min_width']}" == f"{row['max_width']}"
-                          else f"{row['min_width']} a {row['max_width']}"),
-}
+COSTS_FLDS = ('iptu', 'condominium','foro')
 
-BASIC_RENAME = {
-    # 'rent': 'Valor, R$',
-    # 'area': 'Area Total, m2',
-    'title': 'Ref.',
-    'available': 'Disponível',
-    'height': 'Pé direito, m',
-    'efficiency': 'Eficiência logistica, %',
-    'abl': 'ABL, m2',
-    'docks': 'Docas',
-    'flr_capacity': 'Piso, ton/m2',
-}
-
-MDL_RENAME = {
-    **BASIC_RENAME,
-    'office_area': 'Escritório / Mezanino, m2',
-    'energy': 'Capacidade Elétrica, kVa',
-    'width': 'Entre pilares, m',
-    'condominium': 'Condominio, R$/mes',
-    'iptu': 'IPTU, R$/mes',
-    'foro': 'Foro, R$/mes',
-    'rent': 'Locacão, R$/mes',
-    'price': 'Total, R$/mes',
-}
-
-CMP_RENAME = {
-    'address': 'Bairro',
-    'price': 'Total, R$/mes',
-    **BASIC_RENAME,
-}
-
-# correspondance and sequence of eng to pt field's names
-FLDS_RENAME = {
-    'comparisons': {
-        **SLCT_FLD['rename'],
-        'details': 'Detalhes',
-        'address': 'Bairro',
-        'price': 'Total, R$/mes',
-        **BASIC_RENAME,
-    },
-    'modules': {
-        **MDL_RENAME
-    },
-    'properties': {
-        **SLCT_FLD['rename'],
-        **MDL_RENAME,
-    }
-}
+# MODIFICATIONS = {
+#     'select': lambda row: f'<input type="checkbox" name="select_{row["id"]}" value="{row["id"]}">',
+#     'address': lambda row: f"{row['district']} - {row['city']}",
+#     'flr_capacity': lambda row: (f"{row['min_flr_capacity']}"
+#                                  if f"{row['min_flr_capacity']}" == f"{row['max_flr_capacity']}"
+#                                  else f"{row['min_flr_capacity']} a {row['max_flr_capacity']}"),
+#     'details': lambda row: f"<a hx-get='/comparisons/{row['id']}/{row['ppt_type']}' hx-target='#dialog' hx-swap='innerHTML'>{RENAME['details']}</a>",
+#     'available': lambda row: (f"{row['min_available']}"
+#                               if f"{row['min_available']}" == f"{row['max_available']}"
+#                               else f"{row['min_available']} a {row['max_available']}"),
+#     'height': lambda row: (f"{row['min_height']}"
+#                           if f"{row['min_height']}" == f"{row['max_height']}"
+#                           else f"{row['min_height']} a {row['max_height']}"),
+#     'energy': lambda row: (f"{row['min_energy']}"
+#                             if f"{row['min_energy']}" == f"{row['max_energy']}"
+#                             else f"{row['min_energy']} a {row['max_energy']}"),
+#     'width': lambda row: (f"{row['min_width']}"
+#                           if f"{row['min_width']}" == f"{row['max_width']}"
+#                           else f"{row['min_width']} a {row['max_width']}"),
+# }
 
 FILTER_FLDS = {
     "ad_type": AD_TYPE,
     "ppt_type": PPT_TYPE
 }
 
-BROKERS = {
-    'broker_id': ('Corretor1', 'Corretor2', 'Corretor3')
+MIN_MAX = {
+    'min': 'minimum',
+    'max': 'maximum',
 }
 
 RANGES = {
-    'price': {'minimum': 0, 'step': 5, 'maximum': 1000, 'label': 'Valor, R$/m2'},
-    'area': {'minimum': 0, 'step': 10, 'maximum': 1000, 'label': 'Area Total, m2'},
-    'height': {'minimum': 0, 'step': 1, 'maximum': 20, 'label': 'Pé direito, m'},
-    'efficiency': {'minimum': 0, 'step': 10, 'maximum': 100, 'label': 'Eficiência logistica, %'},
-    'abl': {'minimum': 0, 'step': 10, 'maximum': 1000, 'label': 'ABL, m2'},
-    'doks': {'minimum': 0, 'step': 5, 'maximum': 100, 'label': 'Docas'},
-    'flr_capacity': {'minimum': 0, 'step': 1, 'maximum': 20, 'label': 'Piso, ton/m2'},
-    'office_area': {'minimum': 0, 'step': 10, 'maximum': 1000, 'label': 'Escritório/Mezanino, m2'},
-    'energy': {'minimum': 0, 'step': 5, 'maximum': 100, 'label': 'Capacidade de energia, kVa'},
-    # 'last_update': {'minimum': 0, 'step': 10, 'maximum': 1000, 'label': 'Dias da última atualização'},
+    'price': {'minimum': 0, 'step': 5, 'maximum': 1000},
+    'rent': {'minimum': 0, 'step': 5, 'maximum': 1000},
+    'sell': {'minimum': 0, 'step': 5, 'maximum': 1000},
+    'area': {'minimum': 0, 'step': 10, 'maximum': 1000},
+    'height': {'minimum': 0, 'step': 1, 'maximum': 20},
+    'efficiency': {'minimum': 0, 'step': 10, 'maximum': 100},
+    'abl': {'minimum': 0, 'step': 10, 'maximum': 1000},
+    'docks': {'minimum': 0, 'step': 5, 'maximum': 100},
+    'flr_capacity': {'minimum': 0, 'step': 1, 'maximum': 20},
+    'office_area': {'minimum': 0, 'step': 10, 'maximum': 1000},
+    'energy': {'minimum': 0, 'step': 5, 'maximum': 100},
+    # 'last_update': {'minimum': 0, 'step': 10, 'maximum': 1000},
 }
-
-INFRA = ('Refrigeração', 'Segurança', 'ETE')
 
 def costs_const(price_per: str = 'm2') -> dict:
     return {
@@ -245,21 +197,6 @@ def costs_const(price_per: str = 'm2') -> dict:
         'iptu': f'IPTU, R$/{price_per}',
         'foro': f'Foro, R$/{price_per}',
     }
-
-MDL_COL = {
-    # 'rent': 'Valor, R$',
-    # 'area': 'Area Total, m2',
-    'title': 'Ref.',
-    'height': 'Pé direito, m',
-    # 'efficiency': 'Eficiência logistica, %',
-    'abl': 'ABL, m2',
-    'docks': 'Docas',
-    'flr_capacity': 'Piso, ton/m2',
-    'office_area': 'Escritório / Mezanino, m2',
-    'energy': 'Capacidade de energia, kVa',
-    'width': 'Entre pilares, m',
-    'available': 'Disponível',
-}
 
 # PDF creation section
 # Page size (2000px by 1414px)
@@ -275,10 +212,3 @@ BODY_BGD = "assets/backgrounds/body.jpg"
 ABOUT_BGD = "assets/backgrounds/about.jpg" # will be changed with code, probably
 LAST_PAGE_BGD = "assets/backgrounds/last_page.jpg"
 static_map_image = "assets/backgrounds/map.jpg"  # Pre-generated static map with pins
-
-PPT_DTLS_FLDS = {
-    **BASIC_RENAME,
-    'iptu': 'IPTU',
-    'condominium': 'Condomínio',
-    'rent': ...
-}

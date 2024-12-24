@@ -167,3 +167,4 @@ data/
 *.ico
 map.jpg
 .sesskey
+test.py

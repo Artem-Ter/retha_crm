@@ -4,7 +4,7 @@ nav {
   justify-content: flex-end;
 }
 
-#Retha {
+#hdr-left-fld {
   margin-right: auto;
 }
 
@@ -132,6 +132,7 @@ nav {
   justify-content: space-between;
 }
 
+
 .frm-header {
   position: sticky;
   top: 0;
@@ -151,6 +152,24 @@ nav {
   padding: 0;
 }
 
+@media (min-width: 50em) {
+  .body-grid {
+      /* width: 50dvh; */
+      height: 100vh;
+      gap: 1.5rem;
+      /* display: flex;
+      align-items: flex-start; */
+      display: grid;
+      grid-template-columns: 1fr 4fr;
+      padding: 0;
+    }
+
+    .header-grid {
+      gap: 1.5rem;
+      display: grid;
+      grid-template-columns: 3fr 1fr;
+    }
+}
 /* Carousel container */
 .carousel {
   position: relative;
@@ -270,4 +289,12 @@ a {
   cursor: pointer;
   margin: 0px;
   padding: 5px;
+}
+
+.body-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: 2px solid #1b53c0 !important;
 }
